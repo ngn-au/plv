@@ -1,0 +1,14 @@
+# Keep the build context small and free of logs/secrets.
+# (The Dockerfile only copies go.mod, go.sum, *.go and web/.)
+.git
+.gitignore
+.dockerignore
+logs/
+.env
+.claude/
+plv
+*.log
+*.png
+.DS_Store
+README.md
+docker-compose.yaml

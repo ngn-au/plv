@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      plv_network:
+        ipv4_address: 172.20.25.11
+
+  plv:
+    image: jseifeddine/plv:latest
+    # build: . # use only if you want to build the image yourself
+    depends_on:
+      - postgres
+    volumes:
+      - /var/log:/var/log:ro
+    environment:
+      AUTH_USERNAME: ${AUTH_USERNAME}
+      AUTH_PASSWORD_HASH: "${AUTH_PASSWORD_HASH}"
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      RETENTION_DAYS: 90
+    restart: unless-stopped
+    command: ["-addr", ":8080", "-logdir", "/var/log"]
+    networks:
+      plv_network:
+        ipv4_address: 172.20.25.10
+
+networks:
+  plv_network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.25.0/24
+
+volumes:
+  postgres:
