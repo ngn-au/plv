@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -ldflags="-s -w -X main.version=${VERSION}" -o plv .
 
 # create a new stage from alpine
-FROM alpine:3.21
+FROM alpine:3.23
 RUN apk add --no-cache tzdata
 
 # OCI image metadata (the publish workflow adds source/revision labels too).
