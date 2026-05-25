@@ -1,0 +1,51 @@
+# Dependabot — automated dependency update PRs.
+# Pairs with the security layers in CI (govulncheck, dependency-review, CodeQL)
+# and with Dependabot security alerts/updates (enabled in the repo settings).
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates
+
+version: 2
+updates:
+  # Go modules (go.mod / go.sum).
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build"
+      include: scope
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+
+  # GitHub Actions used by the workflows (keeps the pinned SHAs current).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+      include: scope
+    groups:
+      actions-all:
+        patterns: ["*"]
+
+  # The Docker base images in the Dockerfile (golang, alpine).
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build"
+      include: scope

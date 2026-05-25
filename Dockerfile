@@ -11,13 +11,22 @@ RUN go mod download
 COPY *.go ./
 COPY web ./web
 
-# cross-compile a static binary for the target platform
+# cross-compile a static binary for the target platform.
+# VERSION is injected into the binary via -ldflags (defaults to "dev").
 ARG TARGETOS TARGETARCH
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o plv .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -ldflags="-s -w -X main.version=${VERSION}" -o plv .
 
 # create a new stage from alpine
 FROM alpine:3.21
 RUN apk add --no-cache tzdata
+
+# OCI image metadata (the publish workflow adds source/revision labels too).
+LABEL org.opencontainers.image.title="plv" \
+      org.opencontainers.image.description="PLV — Postfix Log Viewer" \
+      org.opencontainers.image.source="https://github.com/ngn-au/plv" \
+      org.opencontainers.image.licenses="MIT"
 
 # copy the binary from the builder stage
 COPY --from=builder /app/plv /usr/local/bin/plv

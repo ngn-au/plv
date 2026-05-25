@@ -1,0 +1,71 @@
+name: Bug report
+description: Something isn't working the way it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Do not paste real mail-log lines, recipient addresses, or other
+        production data.** Reproduce with synthetic data — `example.com` addresses and RFC 5737
+        documentation IPs (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`).
+        For a security vulnerability, use the private flow in [SECURITY.md](../blob/main/SECURITY.md) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run PLV against logs containing …
+        2. Search / open the message …
+        3. The disposition shows … but should be …
+    validations:
+      required: true
+  - type: textarea
+    id: sample
+    attributes:
+      label: Synthetic log sample (optional)
+      description: A made-up `mail.log` line that reproduces the parsing/classification, with example.com + RFC 5737 IPs only.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `plv version`, or the image tag you ran.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - parsing / disposition classification
+        - search / filtering / UI
+        - PostgreSQL persistence / retention
+        - authentication / login
+        - rspamd correlation
+        - Docker / deployment
+        - other / not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: persistence
+    attributes:
+      label: Persistence mode
+      options:
+        - in-memory (no DATABASE_URL)
+        - PostgreSQL (DATABASE_URL set)
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: PLV startup / error output
+      description: PLV's own log output around the problem (not mail.log content). Redact anything sensitive.
+      render: shell

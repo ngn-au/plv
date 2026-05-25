@@ -1,0 +1,103 @@
+# =============================================================================
+# CI — runs on every PR, every push to main, and every vX.Y.Z tag.
+#
+# Gates a change on the same checks a maintainer would run locally:
+#   • go:           gofmt, go vet, build, and the race-enabled test suite.
+#   • govulncheck:  the official Go vulnerability scanner (deps + stdlib).
+#   • docker:       the production image still builds from a clean checkout.
+#
+# The `go` and `govulncheck` jobs run locally under act (see .actrc / Makefile);
+# the docker job needs a real runner. Nothing here is published — see
+# docker-publish.yml for GHCR and release.yml for binaries.
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs for the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Format + vet + build + race-enabled tests.
+  # ---------------------------------------------------------------------------
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Format check (gofmt)
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"; echo "$unformatted"
+            echo "Run: gofmt -w ."
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build -ldflags="-s -w" ./...
+
+      - name: Test (race)
+        run: go test -race ./...
+
+  # ---------------------------------------------------------------------------
+  # Official Go vulnerability scanner (golang.org/x/vuln).
+  # ---------------------------------------------------------------------------
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+  # ---------------------------------------------------------------------------
+  # Prove the production image still builds from a clean checkout.
+  # Build-only: nothing is pushed (publishing lives in docker-publish.yml).
+  # ---------------------------------------------------------------------------
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build image (amd64, no push)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: false
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

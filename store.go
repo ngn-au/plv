@@ -330,23 +330,23 @@ func (s *Store) mergeRecord(dst, src *Record) {
 }
 
 type RecordDetail struct {
-	Timestamp    string    `json:"timestamp"`
-	QueueID      string    `json:"queue_id"`
-	From         string    `json:"from"`
-	To           string    `json:"to"`
-	Subject      string    `json:"subject"`
-	Size         string    `json:"size"`
-	SizeBytes    int64     `json:"size_bytes"`
-	MessageID    string    `json:"message_id"`
-	Status       string    `json:"status"`
-	StatusDetail string    `json:"status_detail"`
-	Relay        string    `json:"relay"`
-	Client       string    `json:"client"`
-	TLS          string    `json:"tls"`
-	Disposition  string    `json:"disposition"`
-	Filter       string    `json:"filter"`
-	FilterAction string    `json:"filter_action"`
-	SpamScore    string    `json:"spam_score"`
+	Timestamp       string    `json:"timestamp"`
+	QueueID         string    `json:"queue_id"`
+	From            string    `json:"from"`
+	To              string    `json:"to"`
+	Subject         string    `json:"subject"`
+	Size            string    `json:"size"`
+	SizeBytes       int64     `json:"size_bytes"`
+	MessageID       string    `json:"message_id"`
+	Status          string    `json:"status"`
+	StatusDetail    string    `json:"status_detail"`
+	Relay           string    `json:"relay"`
+	Client          string    `json:"client"`
+	TLS             string    `json:"tls"`
+	Disposition     string    `json:"disposition"`
+	Filter          string    `json:"filter"`
+	FilterAction    string    `json:"filter_action"`
+	SpamScore       string    `json:"spam_score"`
 	FilterRule      string    `json:"filter_rule"`
 	FilterID        string    `json:"filter_id"`
 	DeliveryQueueID string    `json:"delivery_queue_id"`
@@ -384,23 +384,23 @@ func (s *Store) GetDetail(queueID string) *RecordDetail {
 	}
 
 	return &RecordDetail{
-		Timestamp:    ts,
-		QueueID:      r.QueueID,
-		From:         r.From,
-		To:           r.To,
-		Subject:      r.Subject,
-		Size:         formatSize(r.Size),
-		SizeBytes:    r.Size,
-		MessageID:    r.MessageID,
-		Status:       r.Status,
-		StatusDetail: r.StatusDetail,
-		Relay:        r.Relay,
-		Client:       r.Client,
-		TLS:          r.TLS,
-		Disposition:  r.dispositionOrStatus(),
-		Filter:       r.Filter,
-		FilterAction: r.FilterAction,
-		SpamScore:    r.SpamScore,
+		Timestamp:       ts,
+		QueueID:         r.QueueID,
+		From:            r.From,
+		To:              r.To,
+		Subject:         r.Subject,
+		Size:            formatSize(r.Size),
+		SizeBytes:       r.Size,
+		MessageID:       r.MessageID,
+		Status:          r.Status,
+		StatusDetail:    r.StatusDetail,
+		Relay:           r.Relay,
+		Client:          r.Client,
+		TLS:             r.TLS,
+		Disposition:     r.dispositionOrStatus(),
+		Filter:          r.Filter,
+		FilterAction:    r.FilterAction,
+		SpamScore:       r.SpamScore,
 		FilterRule:      r.FilterRule,
 		FilterID:        r.FilterID,
 		DeliveryQueueID: r.DeliveryQueueID,

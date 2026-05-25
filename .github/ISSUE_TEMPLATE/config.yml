@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/ngn-au/plv/security/advisories/new
+    about: Report a security issue privately — please do not open a public issue.
+  - name: Documentation
+    url: https://github.com/ngn-au/plv/tree/main/docs
+    about: Installation, configuration, the disposition model, the HTTP API, and security.

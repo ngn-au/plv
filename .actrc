@@ -1,0 +1,17 @@
+# act (https://github.com/nektos/act) defaults for this repo — run the GitHub
+# Actions CI jobs locally before pushing. With these set, `act -j go` and
+# `act -j govulncheck` work with no extra flags (and no interactive image prompt).
+#
+# Runner image: the "medium" catthehacker image (multi-arch) — it ships Go's
+# build deps and is enough for the `go` and `govulncheck` jobs. The `docker`
+# build job, CodeQL, Scorecard, and dependency-review need a real GitHub-hosted
+# runner and are NOT run here.
+-P ubuntu-latest=catthehacker/ubuntu:act-latest
+
+# No --container-architecture: act uses the HOST-native arch (arm64 on Apple
+# silicon, amd64 on Linux). Forcing linux/amd64 on Apple silicon runs under
+# QEMU, which is slow and flaky for the Go toolchain.
+
+# Default to the CI workflow, so `act -j go` / `act -j govulncheck` need no other
+# flags. (act only honours one -j per run; `make ci-local` runs both in turn.)
+-W .github/workflows/ci.yml
