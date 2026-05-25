@@ -23,9 +23,23 @@ make run LOGDIR=/path/to/logs      # → http://localhost:8080
 #   equivalently: go run . -addr :8080 -logdir /path/to/logs
 ```
 
-There is **no committed sample log**. To exercise the parser end to end, point `-logdir` at a
-directory holding a `mail.log` you control, or write a synthetic one. **Never** use real production
-logs as a fixture, and never commit one (`logs/` is git-ignored for exactly this reason).
+There is **no committed sample log**. To exercise the parser end to end without a real mail host, use
+the bundled generator (next section). **Never** use real production logs as a fixture, and never
+commit one (`logs/` is git-ignored for exactly this reason).
+
+## Sample data (for screenshots & demos)
+
+[`tools/loggen`](../tools/loggen) generates synthetic PMG-style logs — 30 days by default — that flow
+through PLV's real classification pipeline (delivered/spam/virus/blocked/rejected/bounced/deferred,
+inbound↔outbound leg merge, gzipped rotations). All data is documentation-safe (`example.*` domains +
+RFC 5737 IPs); it writes only to its output dir and reads no existing logs.
+
+```bash
+go run ./tools/loggen          # → ./logs/sample (git-ignored)
+go run . -logdir logs/sample   # → http://localhost:8080
+```
+
+Flags and details: [`tools/loggen/README.md`](../tools/loggen/README.md).
 
 ## The local gate
 
