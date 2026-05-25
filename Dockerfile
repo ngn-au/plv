@@ -1,6 +1,6 @@
 # Build on the native host arch and cross-compile to the target arch (no QEMU
 # for the Go build). BUILDPLATFORM/TARGETOS/TARGETARCH are provided by buildx.
-FROM --platform=$BUILDPLATFORM golang:1.26.1-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine AS builder
 WORKDIR /app
 
 # download dependencies (cached layer)
