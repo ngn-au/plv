@@ -16,9 +16,17 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// version is the build version, injected at build time via
+// -ldflags "-X main.version=vX.Y.Z". It defaults to "dev" for local builds.
+var version = "dev"
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "hash" {
 		runHashCommand()
+		return
+	}
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "-version" || os.Args[1] == "--version") {
+		fmt.Println(version)
 		return
 	}
 
@@ -28,6 +36,7 @@ func main() {
 
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmsgprefix)
 	log.SetPrefix("[plv] ")
+	log.Printf("PLV %s starting", version)
 
 	var auth *AuthConfig
 	username := os.Getenv("AUTH_USERNAME")

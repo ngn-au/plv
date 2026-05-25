@@ -13,7 +13,7 @@ services:
         ipv4_address: 172.20.25.11
 
   plv:
-    image: jseifeddine/plv:latest
+    image: ghcr.io/ngn-au/plv:latest
     # build: . # use only if you want to build the image yourself
     depends_on:
       - postgres

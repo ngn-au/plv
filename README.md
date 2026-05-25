@@ -1,23 +1,38 @@
 # PLV — Postfix Log Viewer
 
-See [https://hub.docker.com/r/jseifeddine/plv](https://hub.docker.com/r/jseifeddine/plv)
+[![CI](https://github.com/ngn-au/plv/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ngn-au/plv/actions/workflows/ci.yml?query=branch%3Amain)
+[![CodeQL](https://github.com/ngn-au/plv/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/ngn-au/plv/actions/workflows/codeql.yml?query=branch%3Amain)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/ngn-au/plv/badge)](https://scorecard.dev/viewer/?uri=github.com/ngn-au/plv)
+[![Release](https://img.shields.io/github/v/release/ngn-au/plv)](https://github.com/ngn-au/plv/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/ngn-au/plv)](./LICENSE)
 
-A lightweight web UI for searching and visualising Postfix mail logs.
-Parses every `mail.log*` file (including gzipped rotations) on startup, then
-live-tails `mail.log` for new entries. Optionally persists records to PostgreSQL
-so data survives container restarts.
+[![Container: GHCR](https://img.shields.io/badge/ghcr.io-plv-2496ED?logo=docker&logoColor=white)](https://github.com/ngn-au/plv/pkgs/container/plv)
+[![GHCR version](https://ghcr-badge.egpl.dev/ngn-au/plv/latest_tag?ignore=latest,edge&label=ghcr.io&color=%232ea44f)](https://github.com/ngn-au/plv/pkgs/container/plv)
+[![GHCR image size](https://ghcr-badge.egpl.dev/ngn-au/plv/size?tag=latest&label=image%20size&color=%232ea44f)](https://github.com/ngn-au/plv/pkgs/container/plv)
+[![GHCR pulls](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fghcr-badge.elias.eu.org%2Fapi%2Fngn-au%2Fplv&query=%24.downloadCount&label=ghcr%20pulls&logo=docker&logoColor=white&color=2496ED)](https://github.com/ngn-au/plv/pkgs/container/plv)
 
-It is **content-filter aware**: when Postfix hands a message to a local scanner
-(e.g. Proxmox Mail Gateway's `pmg-smtp-filter`), Postfix logs only `status=sent`
-to the scanner — which is misleading if the scanner then quarantines or blocks the
-mail. PLV correlates the scanner's verdict back to the message and shows the real
-outcome.
+[![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
+[![PostgreSQL: optional](https://img.shields.io/badge/PostgreSQL-optional-336791?logo=postgresql&logoColor=white)](#postgresql-persistence)
+[![Postfix](https://img.shields.io/badge/Postfix-mail.log-D70751)](#)
+[![Filter-aware](https://img.shields.io/badge/filter--aware-PMG%20%C2%B7%20rspamd-6f42c1)](#spam--mail-filter-detection)
+
+A lightweight web UI for searching and visualising Postfix mail logs. Parses every `mail.log*` file
+(including gzipped rotations) on startup, then live-tails `mail.log` for new entries. Optionally
+persists records to PostgreSQL so data survives container restarts.
+
+It is **content-filter aware**: when Postfix hands a message to a local scanner (e.g. Proxmox Mail
+Gateway's `pmg-smtp-filter`), Postfix logs only `status=sent` to the scanner — which is misleading if
+the scanner then quarantines or blocks the mail. PLV correlates the scanner's verdict back to the
+message and shows the real outcome.
+
+> **New here?** The [Quick start](#quick-start) gets you reading logs in a minute; the full
+> [documentation](./docs/README.md) covers installation, configuration, the disposition model, and
+> the HTTP API.
 
 ## Spam & mail-filter detection
 
-Each message is shown with an **effective disposition** rather than the raw Postfix
-`status`. The raw status and scanner details are preserved in the row tooltip and the
-detail view.
+Each message is shown with an **effective disposition** rather than the raw Postfix `status`. The raw
+status and scanner details are preserved in the row tooltip and the detail view.
 
 | Disposition | Meaning |
 |-------------|---------|
@@ -27,26 +42,21 @@ detail view.
 | `rejected`  | Rejected (incl. SMTP-time `NOQUEUE` rejections — RBL, relay, postscreen) |
 | `bounced` / `deferred` | Standard Postfix outcomes |
 
-How correlation works: a hand-off line such as
-`status=sent (250 2.5.0 OK (C0FFEE0000000001))` carries the filter's session id in
-the trailing parentheses. PLV matches that id to the `pmg-smtp-filter` lines for the
-same session (`SA score=…`, `moved … to spam quarantine`, `accept mail …`) to derive
-the disposition, spam score and rule. `NOQUEUE` rejections — which never get a queue
-id — are captured as standalone records, and are always classified as `rejected`
-(postfix uses a 4xx code for some policy rejections, but the mail was still refused).
+How correlation works: a hand-off line such as `status=sent (250 2.5.0 OK (C0FFEE0000000001))`
+carries the filter's session id in the trailing parentheses. PLV matches that id to the
+`pmg-smtp-filter` lines for the same session (`SA score=…`, `moved … to spam quarantine`,
+`accept mail …`) to derive the disposition, spam score and rule. `NOQUEUE` rejections — which never
+get a queue id — are captured as standalone records, and are always classified as `rejected`.
 
-**One item per message.** A scanned-and-accepted message has two postfix queue ids:
-the inbound leg to the scanner (`relay=127.0.0.1`) and the re-injected outbound leg
-to the real destination. PLV links them (via the `accept mail … (<queue-id>)` line)
-and merges them into a single row that keeps the inbound metadata (subject, original
-client, scanner verdict) and shows the real destination relay and final delivery
-status. The internal `127.0.0.1` scanner leg is therefore only shown on its own when
-the message was **not** delivered onward (i.e. quarantined or blocked). Either queue
-id resolves to the merged item in search and detail.
+**One item per message.** A scanned-and-accepted message has two Postfix queue ids: the inbound leg
+to the scanner (`relay=127.0.0.1`) and the re-injected outbound leg to the real destination. PLV
+links them (via the `accept mail … (<queue-id>)` line) and merges them into a single row that keeps
+the inbound metadata (subject, original client, scanner verdict) and shows the real destination relay
+and final delivery status. Either queue id resolves to the merged item in search and detail.
 
-Everything is read from the standard `mail.log*` files; no extra log sources are
-required. (rspamd that logs only to its own `rspamd.log` is out of scope — only its
-`milter-reject` lines that reach `mail.log` are classified.)
+rspamd hosts that log verdicts to their own `rspamd.log*` are also correlated: PLV joins each task
+summary line to the matching mail record by queue id (it never creates standalone rows from rspamd
+lines). The full model is in **[`docs/disposition.md`](./docs/disposition.md)**.
 
 ## Quick start
 
@@ -56,8 +66,10 @@ required. (rspamd that logs only to its own `rspamd.log` is out of scope — onl
 # docker-compose.yaml
 services:
   plv:
-    image: jseifeddine/plv:latest
+    image: ghcr.io/ngn-au/plv:latest
     container_name: plv
+    ports:
+      - "8080:8080"
     volumes:
       - /var/log:/var/log:ro
     restart: unless-stopped
@@ -66,7 +78,11 @@ services:
 
 ```bash
 docker compose up -d
+#   → http://localhost:8080
 ```
+
+Prefer a pinned version? Use `ghcr.io/ngn-au/plv:1.0.0` (or `:1.0`) instead of `:latest`. Multi-arch
+images (`amd64` / `arm64`) are published on every release.
 
 ### Building from source
 
@@ -75,6 +91,8 @@ services:
   plv:
     build: .
     container_name: plv
+    ports:
+      - "8080:8080"
     volumes:
       - /var/log:/var/log:ro
     restart: unless-stopped
@@ -85,12 +103,16 @@ services:
 docker compose up -d --build
 ```
 
-The UI is available on the port/network defined in your `docker-compose.yaml`.
+Or run it directly with Go (1.26+):
+
+```bash
+go run . -addr :8080 -logdir /var/log
+```
 
 ## PostgreSQL persistence
 
-By default PLV keeps everything in memory — fast, but data is lost when the
-container restarts. Set `DATABASE_URL` to enable PostgreSQL persistence:
+By default PLV keeps everything in memory — fast, but data is lost when the container restarts. Set
+`DATABASE_URL` to enable PostgreSQL persistence:
 
 ```yaml
 services:
@@ -106,7 +128,7 @@ services:
     restart: unless-stopped
 
   plv:
-    image: jseifeddine/plv:latest
+    image: ghcr.io/ngn-au/plv:latest
     # build: .              # uncomment to build from source instead
     container_name: plv
     depends_on:
@@ -129,16 +151,16 @@ When `DATABASE_URL` is set, PLV will:
 3. Load any previously stored records into memory.
 4. Persist every new or updated record as it is parsed.
 
-If `DATABASE_URL` is not set, PLV runs purely in-memory with no database
-dependency.
+If `DATABASE_URL` is not set, PLV runs purely in-memory with no database dependency. A complete,
+network-pinned compose stack (Postgres + PLV + auth + retention) lives in
+[`docker-compose.yaml`](./docker-compose.yaml).
 
 ### Data retention
 
-Without PostgreSQL, data lifetime is naturally bounded by the log files on
-disk — PLV only ever sees what's in the current `mail.log*` files.
+Without PostgreSQL, data lifetime is naturally bounded by the log files on disk — PLV only ever sees
+what's in the current `mail.log*` files.
 
-With PostgreSQL enabled, records accumulate indefinitely unless you set a
-retention period:
+With PostgreSQL enabled, records accumulate indefinitely unless you set a retention period:
 
 ```yaml
 environment:
@@ -146,18 +168,14 @@ environment:
   RETENTION_DAYS: 90
 ```
 
-When `RETENTION_DAYS` is set, PLV will:
-
-- Purge records older than the specified number of days on startup.
-- Re-check and purge every hour while running.
-- Remove expired records from both in-memory and the database.
-
-If `RETENTION_DAYS` is not set, no automatic purging occurs.
+When `RETENTION_DAYS` is set, PLV purges records older than the given number of days on startup and
+re-checks every hour, removing expired records from both memory and the database. If it is not set,
+no automatic purging occurs.
 
 ## Authentication
 
-Access is protected by a username and bcrypt-hashed password passed as
-environment variables. Generate a hash with the built-in helper:
+Access is protected by a username and bcrypt-hashed password passed as environment variables.
+Generate a hash with the built-in helper:
 
 ```bash
 # Inside the container
@@ -167,13 +185,7 @@ docker exec plv plv hash 'my-secret-password'
 ./plv hash 'my-secret-password'
 ```
 
-The command prints a bcrypt hash like:
-
-```
-$2a$10$fz/dpncQjZSE3BCSMLAp8.EEpgg101NIhp2SMO829miomGFLs.lYm
-```
-
-Set both variables in your compose environment (or a `.env` file):
+The command prints a bcrypt hash. Set both variables in your compose environment (or a `.env` file):
 
 ```yaml
 environment:
@@ -181,11 +193,11 @@ environment:
   AUTH_PASSWORD_HASH: "$$2a$$10$$fz/dpncQjZSE3BCSMLAp8.EEpgg101NIhp2SMO829miomGFLs.lYm"
 ```
 
-> **Note:** Dollar signs must be doubled (`$$`) inside `docker-compose.yaml` to
-> prevent variable interpolation. Alternatively, place the raw hash in a `.env`
-> file and reference it with `${AUTH_PASSWORD_HASH}`.
+> **Note:** Dollar signs must be doubled (`$$`) inside `docker-compose.yaml` to prevent variable
+> interpolation. Alternatively, place the raw hash in a `.env` file and reference it with
+> `${AUTH_PASSWORD_HASH}`.
 
-If neither variable is set, authentication is disabled entirely.
+If neither variable is set, authentication is disabled entirely — only do this on a trusted network.
 
 ## Environment variables
 
@@ -194,31 +206,38 @@ If neither variable is set, authentication is disabled entirely.
 | `DATABASE_URL` | No | PostgreSQL connection string. Omit to run in-memory only. |
 | `RETENTION_DAYS` | No | Number of days to keep records when using PostgreSQL. Omit to keep data indefinitely. |
 | `AUTH_USERNAME` | No | Login username. Both `AUTH_USERNAME` and `AUTH_PASSWORD_HASH` must be set to enable auth. |
-| `AUTH_PASSWORD_HASH` | No | Bcrypt hash of the login password. |
+| `AUTH_PASSWORD_HASH` | No | Bcrypt hash of the login password (from `plv hash`). |
+
+Command-line flags: `-addr` (listen address, default `:8080`) and `-logdir` (log directory, default
+`/var/log`). See **[`docs/configuration.md`](./docs/configuration.md)** for the full reference.
 
 ## Enabling subject logging in Postfix
 
-Postfix does **not** log the `Subject:` header by default.
-Without it the *Subject* field in PLV will always be empty.
+Postfix does **not** log the `Subject:` header by default. Without it the *Subject* field in PLV will
+always be empty. The one-time `header_checks` setup is documented in
+**[`docs/postfix-setup.md`](./docs/postfix-setup.md)**.
 
-To enable it, add a `header_checks` rule that makes Postfix log every
-`Subject:` line it sees:
+## Documentation
 
-```bash
-# 1. Add this to /etc/postfix/main.cf (if not already present)
-header_checks = regexp:/etc/postfix/header_checks
+Full guides live in **[`docs/`](./docs/README.md)**:
 
-# 2. Create or append to /etc/postfix/header_checks
-echo '/^Subject:/     WARN' >> /etc/postfix/header_checks
+| Guide | Purpose |
+|---|---|
+| [Installation](./docs/installation.md) | Run PLV with Docker/Compose or from source; auth and persistence. |
+| [Configuration](./docs/configuration.md) | Every flag and environment variable, explained. |
+| [Disposition model](./docs/disposition.md) | How effective dispositions and filter correlation work. |
+| [Architecture](./docs/architecture.md) | How the Go files fit together; the parse → store pipeline. |
+| [HTTP API](./docs/api.md) | The JSON endpoints behind the UI. |
+| [Postfix setup](./docs/postfix-setup.md) | Enable `Subject:` logging via `header_checks`. |
+| [Security](./docs/security.md) | Production-hardening checklist. |
+| [Development](./docs/development.md) | Build, test, and contribute. |
 
-# 3. Reload Postfix
-systemctl reload postfix
-```
+## Status
 
-After the reload, mail.log entries will include lines like:
+**Production-ready.** Run the published image; see [Quick start](#quick-start). Released versions and
+changes are in [`CHANGELOG.md`](./CHANGELOG.md). Contributions welcome — read
+[`CONTRIBUTING.md`](./CONTRIBUTING.md) first.
 
-```
-postfix/cleanup[12345]: ABC123: warning: header Subject: Invoice #4021 from sender@example.com; ...
-```
+## License
 
-PLV picks these up automatically — no restart needed.
+[MIT](./LICENSE) — copy, modify, distribute, or sell with attribution.

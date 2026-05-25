@@ -1,0 +1,14 @@
+# Default owner for everything in the repo. Required reviewer on all PRs.
+* @jseifeddine
+
+# Correctness-critical parsing / correlation — flag for an extra-careful review.
+/parser.go   @jseifeddine
+/store.go    @jseifeddine
+/watcher.go  @jseifeddine
+/rspamd.go   @jseifeddine
+
+# Auth, sessions, and the HTTP surface.
+/handlers.go @jseifeddine
+
+# Persistence (schema migrations, SQL).
+/db.go       @jseifeddine

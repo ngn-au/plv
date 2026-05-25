@@ -1,4 +1,30 @@
+# Compiled binary (built into the repo root by `go build`)
+/plv
+/plv.exe
+
+# Example/local log data. NEVER commit real or sample mail logs — they contain
+# recipients, senders, subjects, and IPs. The repo's parser is exercised only by
+# the synthetic fixtures in *_test.go.
+logs/
+*.log
+
+# Environment / secrets
 .env
-plv
-logs
+.env.local
+.env.*.local
+
+# Go test / coverage output
+*.out
+coverage.txt
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS metadata
 .DS_Store
+Thumbs.db
+desktop.ini

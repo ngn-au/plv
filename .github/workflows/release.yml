@@ -1,0 +1,92 @@
+# =============================================================================
+# Release binaries — cross-compiles the `plv` binary for linux and macOS
+# (each in amd64 and arm64) and attaches them to the GitHub release for the tag,
+# with per-target SHA256SUMS.
+#
+# Go cross-compiles trivially with CGO disabled, so every target builds on one
+# ubuntu runner — no per-arch native runners or QEMU needed.
+#
+# Triggers:
+#   • push of a vX.Y.Z tag  → build for that tag (creating the release if the
+#     tag push didn't already)
+#   • workflow_dispatch      → build for an existing tag passed as input
+# =============================================================================
+
+name: Release binaries
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach binaries to (e.g. v1.0.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  # Make sure a release exists for the tag before the build jobs upload to it.
+  # On a fresh tag push this creates it; for a dispatch against an existing
+  # release it's a no-op (so hand-written release notes are preserved).
+  ensure-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure a release exists for the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "PLV $TAG" --generate-notes
+          fi
+
+  build:
+    needs: ensure-release
+    name: ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux,  arch: amd64 }
+          - { os: linux,  arch: arm64 }
+          - { os: darwin, arch: amd64 }
+          - { os: darwin, arch: arm64 }
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Build the released source, not whatever main happens to be.
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve tag
+        id: ver
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build + checksum
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "0"
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          PLAT="${{ matrix.os }}-${{ matrix.arch }}"
+          OUT="plv-${TAG}-${PLAT}"
+          mkdir -p dist
+          go build -ldflags="-s -w -X main.version=${TAG}" -o "dist/${OUT}" .
+          ( cd dist && shasum -a 256 "${OUT}" > "SHA256SUMS-${TAG}-${PLAT}.txt" )
+          ls -la dist
+
+      - name: Upload binaries to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ steps.ver.outputs.tag }}" dist/* \
+            --repo "$GITHUB_REPOSITORY" --clobber

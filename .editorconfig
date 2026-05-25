@@ -1,0 +1,30 @@
+# EditorConfig — unifies basic editor behavior across IDEs.
+# https://editorconfig.org/
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Go: tabs (gofmt is law). gofmt renders a tab as the project's chosen width.
+[*.go]
+indent_style = tab
+
+# go.mod / go.sum are gofmt-managed; leave them tab-indented like Go.
+[go.{mod,sum}]
+indent_style = tab
+
+# Web (embedded HTML/CSS/JS), JSON, YAML: 2-space indent.
+[*.{html,css,js,json,yml,yaml}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+# Markdown is space-sensitive at line ends (two trailing spaces = hard break).
+trim_trailing_whitespace = false
+
+[Makefile]
+indent_style = tab

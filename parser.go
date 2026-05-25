@@ -32,8 +32,8 @@ var (
 	// origin as orig_client= alongside client=localhost.
 	reOrigClient = regexp.MustCompile(`orig_client=([a-zA-Z0-9\-._]+)?\[([^\]]*)\]`)
 	reConnect    = regexp.MustCompile(`connect from ([a-zA-Z0-9\-._]+)\[([^\]]+)\]`)
-	reTLS       = regexp.MustCompile(`Trusted TLS connection established to ([^[]+)\[([^\]]+)\]:([0-9]+)`)
-	reTimestamp = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\S+)`)
+	reTLS        = regexp.MustCompile(`Trusted TLS connection established to ([^[]+)\[([^\]]+)\]:([0-9]+)`)
+	reTimestamp  = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\S+)`)
 
 	// Content-filter (Proxmox Mail Gateway pmg-smtp-filter) correlation.
 	// reFilterTag identifies a filter line and captures its session id.
@@ -46,7 +46,7 @@ var (
 	// (Level 3)", so capture greedily up to the final ")" on the line.
 	reQuarantine = regexp.MustCompile(`to ([a-z]+) quarantine - ([A-Fa-f0-9]+) \(rule: (.+)\)`)
 	reAccept     = regexp.MustCompile(`accept mail to <[^>]*> \(([A-Fa-f0-9]+)\) \(rule: (.+)\)`)
-	reBlock         = regexp.MustCompile(`block mail to `)
+	reBlock      = regexp.MustCompile(`block mail to `)
 	// reNoQueue parses SMTP-time rejections that never get a queue id
 	// (postscreen/smtpd "NOQUEUE: reject"). host is optional (postscreen logs
 	// "from [ip]:port" with no hostname).

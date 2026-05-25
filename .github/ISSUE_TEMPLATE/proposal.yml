@@ -1,0 +1,36 @@
+name: Feature proposal
+description: Propose a new feature or a change in direction.
+labels: ["proposal"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Open a proposal **before** writing code for anything non-trivial — it's cheaper to agree on
+        direction first. A maintainer will ack the direction before implementation.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't you do today with PLV, and who is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you build? How does it behave from the operator's point of view?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches, and why this one.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This fits PLV's purpose (viewing & classifying Postfix mail logs).
+          required: true
+        - label: I'm willing to help implement it.
