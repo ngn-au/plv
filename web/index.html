@@ -48,13 +48,28 @@
 
     /* ── Cards ──────────────────────────────────────────────── */
     .card { border-radius: var(--plv-radius); box-shadow: var(--plv-shadow); }
-    .stats-card { transition: transform .12s ease, box-shadow .12s ease; }
+    /* overflow:visible lets the floating active-indicator bar (an absolute ::after that
+       sits below the card) show without being clipped. The bar and the lift are
+       absolute/transform only, so toggling active never changes card or row height. */
+    .stats-card { position: relative; overflow: visible; transition: transform .12s ease, box-shadow .12s ease; }
     .stats-card:hover { transform: translateY(-2px); box-shadow: var(--plv-shadow-hover); }
     .stats-card .card-body { padding: .7rem .9rem; }
     .stats-card .stat-value { font-size: 1.55rem; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
+    .stats-card .stat-icon svg { width: 28px; height: 28px; opacity: .8; }
     .stats-card .stat-label { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
-    .stats-card.is-active { outline: 2px solid var(--tblr-primary); outline-offset: -1px; }
+    /* Active = raised + a coloured indicator bar floating CLEAR BELOW the card (its own
+       element, visibly detached), in the card's accent (works light/dark). */
+    .stats-card.is-active { transform: translateY(-3px); box-shadow: var(--plv-shadow-hover); }
+    .stats-card.is-active::after { content: ''; position: absolute; left: 1.25rem; right: 1.25rem; bottom: -13px; height: 4px; border-radius: 99px; background: var(--accent, var(--tblr-primary)); }
+    .stats-card[data-filter-status="sent"]     { --accent: #2fb344; }
+    .stats-card[data-filter-status="spam"]     { --accent: #f76707; }
+    .stats-card[data-filter-status="blocked"]  { --accent: #ae3ec9; }
+    .stats-card[data-filter-status="rejected"] { --accent: #d63939; }
+    .stats-card[data-filter-status="bounced"]  { --accent: #f59f00; }
+    .stats-card[data-filter-status="deferred"] { --accent: #4299e1; }
+    .stats-card[data-filter-status="ndr"]      { --accent: #e6a817; }
     .stats-card.clickable { cursor: pointer; }
+    .card-filter-note:empty { display: none; }
 
     /* ── Search toolbar ─────────────────────────────────────── */
     .search-box { position: relative; }
@@ -74,6 +89,10 @@
     }
     .chip:hover { border-color: var(--tblr-primary); color: var(--tblr-body-color); }
     .chip .chip-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: .6; }
+    .chip.active .chip-dot, .chip:hover .chip-dot { background: #fff; opacity: 1; }
+    /* "received" = message accepted into the queue — its own navy, darker than the
+       inbound blue and distinct from the green "sent". */
+    .badge.badge-received { background: #243b6b; color: #fff; }
     .chip.active { color: #fff; border-color: transparent; }
     .chip[data-status=""].active        { background: var(--tblr-primary); }
     .chip[data-status="sent"].active     { background: #2fb344; }
@@ -85,7 +104,15 @@
     .chip[data-status="deferred"].active { background: #4299e1; }
     .chip-dot.sent { color: #2fb344; } .chip-dot.spam { color: #f76707; }
     .chip-dot.blocked, .chip-dot.virus { color: #ae3ec9; } .chip-dot.rejected { color: #d63939; }
-    .chip-dot.bounced { color: #f59f00; } .chip-dot.deferred { color: #4299e1; }
+    .chip-dot.bounced { color: #f59f00; } .chip-dot.deferred { color: #4299e1; } .chip-dot.ndr { color: #e6a817; }
+    .chip[data-status="ndr"].active { background: #e6a817; }
+    /* Direction chips: neutral when idle, colour fills only on hover/active (like status). */
+    .chip-dot.dir-inbound { color: #4299e1; } .chip-dot.dir-outbound { color: #f76707; } .chip-dot.dir-internal { color: #667382; } .chip-dot.dir-relayed { color: #7048e8; }
+    .chip[data-direction=""].active { background: var(--tblr-primary); }
+    .chip[data-direction="inbound"]:hover,  .chip[data-direction="inbound"].active  { background: #4299e1; color: #fff; border-color: transparent; }
+    .chip[data-direction="outbound"]:hover, .chip[data-direction="outbound"].active { background: #f76707; color: #fff; border-color: transparent; }
+    .chip[data-direction="internal"]:hover, .chip[data-direction="internal"].active { background: #667382; color: #fff; border-color: transparent; }
+    .chip[data-direction="relayed"]:hover,  .chip[data-direction="relayed"].active  { background: #7048e8; color: #fff; border-color: transparent; }
 
     /* ── Active-filter pills ────────────────────────────────── */
     .active-filters { display: flex; flex-wrap: wrap; gap: .4rem; }
@@ -97,13 +124,75 @@
 
     /* ── Badges & table ─────────────────────────────────────── */
     .badge-status { font-size: .75em; font-weight: 600; border-radius: 6px; padding: .35em .6em; text-transform: capitalize; }
-    #log-table td { font-size: .8125rem; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; vertical-align: middle; }
-    #log-table td:hover { overflow: visible; white-space: normal; word-break: break-all; }
-    #log-table tbody tr:hover { background: var(--tblr-hover-bg); }
+    /* Fixed layout: every column width below is authoritative; cells always wrap and
+       never truncate (long no-space tokens like SRS addresses break to fit). */
+    #log-table { table-layout: fixed; }
+    /* Reserve ~20 rows of height so short/empty result sets don't collapse the card,
+       but let it GROW with wrapped content (no inner scrollbar — the page scrolls). */
+    .table-card .table-responsive { min-height: 720px; }
+    #log-table td { font-size: .8125rem; cursor: pointer; vertical-align: middle; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+    #log-table th { white-space: normal; overflow-wrap: anywhere; }
     table.dataTable thead th { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--tblr-secondary-color); }
+    /* Manual striping: per-row normally, per-GROUP (shared colour) when grouped. */
+    [data-bs-theme="light"] #log-table tbody tr.stripe-alt > td { background-color: rgba(0,0,0,.035); }
+    [data-bs-theme="dark"]  #log-table tbody tr.stripe-alt > td { background-color: rgba(255,255,255,.04); }
+    /* A correlation group reads as one block via a `tree`-style rail — all rows are
+       peers (vertical line + tick per row, trimmed at the first/last), no arrow. */
+    [data-bs-theme="light"] #log-table { --tree-line: rgba(0,0,0,.22); }
+    [data-bs-theme="dark"]  #log-table { --tree-line: rgba(255,255,255,.24); }
+    /* Indent the first column uniformly so timestamps align whether or not a row is
+       grouped (the rail only draws on grouped rows, into the reserved space). */
+    #log-table thead th:first-child, #log-table tbody td:first-child { padding-left: 1.9rem; }
+    #log-table tbody td:first-child { position: relative; }
+    #log-table tbody tr.grp-row > td:first-child::before { content: ""; position: absolute; left: .9rem; top: 0; bottom: 0; width: 2px; background: var(--tree-line); }
+    #log-table tbody tr.grp-row > td:first-child::after  { content: ""; position: absolute; left: .9rem; top: 50%; width: .6rem; height: 2px; transform: translateY(-50%); background: var(--tree-line); }
+    #log-table tbody tr.grp-first > td:first-child::before { top: 50%; }
+    #log-table tbody tr.grp-last  > td:first-child::before { bottom: 50%; }
+    .result-line { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
+    .result-line .result-text { font-size: .9rem; word-break: break-word; }
+    /* Status cascade: a vertical series of events; the last row is the result. */
+    /* The status cascade mirrors the mail path vertically: From endpoint, server hops,
+       then the flagged result. A grid keeps the marker / chip / status / text in their
+       own columns so long status detail wraps in place without shoving the badges. */
+    .status-cascade { display: grid; grid-template-columns: 1rem auto auto minmax(0, 1fr) auto; column-gap: .65rem; row-gap: .55rem; align-items: start; margin-top: .65rem; }
+    .sc-step { display: contents; }
+    .sc-marker { grid-column: 1; justify-self: center; align-self: start; margin-top: .14rem; width: 1rem; height: 1.05rem; display: flex; align-items: center; justify-content: center; color: var(--tblr-secondary-color); }
+    .sc-marker::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--tblr-border-color); }
+    .sc-marker.sc-flag::before, .sc-marker.sc-icon::before { display: none; }
+    .sc-marker.sc-flag svg, .sc-marker.sc-icon svg { width: 15px; height: 15px; }
+    .sc-srv { grid-column: 2; align-self: start; display: inline-flex; }
+    .sc-badge { grid-column: 3; align-self: start; }
+    .sc-text { grid-column: 4; align-self: start; font-size: .85rem; color: var(--tblr-secondary-color); word-break: break-word; line-height: 1.4; }
+    .sc-result .sc-text { color: var(--tblr-body-color); }
+    .sc-ndr { grid-column: 5; align-self: start; justify-self: end; }
+    /* Endpoint rows (From sender, To/result) span the content columns. */
+    .sc-body { grid-column: 2 / -1; align-self: center; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+    .sc-label { font-size: .66rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--tblr-secondary-color); }
+    .sc-addr { font-family: var(--tblr-font-monospace); font-size: .82rem; word-break: break-all; color: var(--tblr-body-color); }
+    .sc-reason { min-width: 0; font-size: .85rem; color: var(--tblr-secondary-color); word-break: break-word; line-height: 1.4; }
+    /* NDR badge — solid amber, readable in both light and dark. */
+    .badge.badge-ndr { background: #c8890a; color: #fff; }
+    /* Hover tooltip for table rows */
+    .row-tip { position: fixed; z-index: 2000; width: max-content; min-width: 280px; max-width: 480px; display: none; pointer-events: none;
+      background: var(--tblr-bg-surface); border: 1px solid var(--tblr-border-color); border-radius: 10px;
+      box-shadow: var(--plv-shadow-hover); padding: .85rem 1rem; font-size: .8125rem; line-height: 1.5; }
+    .row-tip .rt-head { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; margin-bottom: .35rem; }
+    .row-tip .rt-row, .row-tip .rt-result { display: flex; gap: .5rem; align-items: baseline; }
+    .row-tip .rt-k { flex: 0 0 56px; color: var(--tblr-secondary-color); font-weight: 600; }
+    .row-tip .rt-v { flex: 1 1 auto; min-width: 0; word-break: break-word; }
+    .row-tip .rt-result { margin-top: .3rem; padding-top: .3rem; border-top: 1px solid var(--tblr-border-color); align-items: flex-start; }
+    .row-tip .rt-result-text { margin-top: .25rem; }
+    #tips-btn.active { color: var(--tblr-primary); }
+    /* Hover highlights the whole correlation group as one unit (applied via JS), so
+       a relayed pair lights up together — across every cell, incl. the ↳ child cells. */
+    [data-bs-theme="light"] #log-table tbody tr.grp-hover > td { background-color: rgba(32,107,196,.09) !important; }
+    [data-bs-theme="dark"]  #log-table tbody tr.grp-hover > td { background-color: rgba(120,165,255,.13) !important; }
 
     #detail-modal .modal-dialog { max-width: min(1320px, 96vw); }
     #detail-modal .modal-content { border: var(--tblr-border-width) solid var(--tblr-border-color); border-radius: var(--plv-radius); }
+    /* Reserve the scrollbar gutter so revealing the timeline doesn't reflow/shift the
+       content (e.g. nudge the status text) when the scrollbar appears. */
+    #detail-modal .modal-body { scrollbar-gutter: stable; }
     #detail-modal .modal-header { padding: 1.1rem 1.35rem; align-items: flex-start; gap: 1rem; }
     #detail-modal .detail-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; }
     #detail-modal .detail-qid { font-family: var(--tblr-font-monospace); font-size: 1.05rem; font-weight: 600; background: var(--tblr-bg-surface-secondary, rgba(130,130,150,.12)); padding: .2rem .55rem; border-radius: 7px; word-break: break-all; }
@@ -114,9 +203,64 @@
     .detail-field { margin-bottom: .75rem; }
     .detail-field:last-child { margin-bottom: 0; }
     .detail-col-header { font-size: .6875rem; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; padding-bottom: .5rem; margin-bottom: .75rem; border-bottom: 2px solid var(--tblr-border-color); display: flex; align-items: center; gap: .4rem; }
-    .detail-cols { display: grid; grid-template-columns: 1fr 1fr; }
     .detail-cols > div { padding: 1rem 1.25rem; }
-    .detail-cols > div:first-child { border-right: var(--tblr-border-width) solid var(--tblr-border-color); }
+    .detail-cols .envelope-arrow { padding: 0; display: flex; justify-content: center; color: var(--tblr-secondary-color); }
+    .detail-cols .envelope-arrow svg { margin: -.35rem 0; opacity: .6; }
+    .clean-line { display: flex; gap: .75rem; align-items: baseline; }
+    .clean-line .cl-time { flex: 0 0 142px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .clean-line .cl-server { flex: 0 0 84px; }
+    .clean-line .cl-stage { flex: 0 0 128px; }
+    .clean-line .cl-server .srv-badge, .clean-line .cl-stage .badge { white-space: nowrap; }
+    /* min-width:0 lets the event text wrap instead of squeezing the fixed columns */
+    .clean-line .cl-text { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-all; }
+    .srv-badge { white-space: nowrap; }
+    /* Deterministic per-server colour badges + relayed-server chips (theme-aware) */
+    .srv-badge { display: inline-flex; align-items: center; gap: .35rem; font-size: .75em; font-weight: 600; border-radius: 6px; padding: .18em .5em; border: 1px solid transparent; line-height: 1.3; }
+    .srv-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: hsl(var(--hue) 60% 50%); flex: none; }
+    [data-bs-theme="light"] .srv-badge { background: hsl(var(--hue) 70% 95%); color: hsl(var(--hue) 45% 30%); border-color: hsl(var(--hue) 55% 86%); }
+    [data-bs-theme="dark"]  .srv-badge { background: hsl(var(--hue) 35% 20%); color: hsl(var(--hue) 78% 80%); border-color: hsl(var(--hue) 40% 34%); }
+    .srv-chips { display: flex; flex-wrap: wrap; gap: .5rem; }
+    .srv-chip { display: inline-flex; align-items: center; gap: .4rem; cursor: pointer; border-radius: 999px; padding: .32rem .75rem; font-size: .8125rem; font-weight: 600; border: 1px solid var(--tblr-border-color); background: var(--tblr-bg-surface); color: var(--tblr-body-color); transition: all .12s ease; }
+    .srv-chip code { font-size: .78em; opacity: .85; }
+    .srv-chip .dot { width: 9px; height: 9px; border-radius: 50%; background: hsl(var(--hue) 60% 50%); flex: none; }
+    .srv-chip:hover { border-color: hsl(var(--hue) 60% 55%); }
+    .srv-chip.on { color: #fff; border-color: transparent; }
+    [data-bs-theme="light"] .srv-chip.on { background: hsl(var(--hue) 52% 45%); }
+    [data-bs-theme="dark"]  .srv-chip.on { background: hsl(var(--hue) 48% 44%); }
+    .srv-chip.on .dot { background: #fff; }
+    /* ── Mail path visualisation ─────────────────────────────── */
+    .mail-path { display: flex; align-items: center; gap: 0; width: 100%; min-height: 150px; padding: 1.25rem .5rem; overflow-x: auto; }
+    .mp-node { display: flex; flex-direction: column; align-items: center; gap: .5rem; flex: 0 0 auto; min-width: 104px; max-width: 168px; text-align: center; }
+    .mp-icon { width: 52px; height: 52px; display: flex; align-items: center; justify-content: center; border-radius: 14px; border: 1px solid var(--tblr-border-color); background: var(--tblr-bg-surface); color: var(--tblr-secondary-color); }
+    .mp-node.mp-ext .mp-icon { color: #7e8b9a; }
+    .mp-node.mp-mbox .mp-icon { color: #2fb344; border-color: rgba(47,179,68,.4); }
+    .mp-node.mp-stop .mp-icon { color: #d63939; border-color: rgba(214,57,57,.4); }
+    .mp-node.mp-stop .mp-label { text-transform: capitalize; }
+    .mp-node.mp-user .mp-icon { color: #4299e1; }
+    .mp-label { font-size: .82rem; font-weight: 600; line-height: 1.2; word-break: break-word; }
+    .mp-sub { font-size: .7rem; color: var(--tblr-secondary-color); word-break: break-all; }
+    .mp-node .srv-chip { cursor: pointer; }
+    .mp-node .srv-chip.mp-srv { padding: .45rem 1rem; font-size: .9rem; }
+    /* Single-node view: a neutral, clickable server node (no name/identity to show). */
+    .mp-srv-plain { cursor: pointer; transition: all .12s ease; }
+    .mp-srv-plain:hover { border-color: var(--tblr-primary); color: var(--tblr-primary); }
+    .mp-srv-plain.on { border-color: var(--tblr-primary); color: var(--tblr-primary); box-shadow: 0 0 0 2px rgba(var(--tblr-primary-rgb), .2); }
+    /* connectors */
+    .mp-conn { flex: 1 1 40px; min-width: 44px; align-self: center; position: relative; height: 52px; }
+    .mp-conn .line { position: absolute; top: 50%; left: 0; right: 13px; height: 3px; border-radius: 2px; transform: translateY(-50%); background: var(--tblr-secondary-color); opacity: .85; }
+    .mp-conn.dashed .line { background: none; border-top: 3px dashed var(--tblr-secondary-color); opacity: .7; }
+    .mp-conn .arrow { position: absolute; top: 50%; right: 0; transform: translateY(-50%); width: 0; height: 0; border-top: 8px solid transparent; border-bottom: 8px solid transparent; border-left: 13px solid var(--tblr-secondary-color); opacity: .85; }
+    .mp-conn .mp-cloud { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--tblr-bg-surface); padding: 0 .35rem; color: var(--tblr-secondary-color); line-height: 0; }
+    /* our-control boundary divider */
+    .mp-divider { flex: 0 0 auto; align-self: stretch; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .4rem; padding: 0 .25rem; }
+    .mp-divider .bar { width: 0; flex: 1 1 auto; border-left: 2px dashed var(--tblr-border-color); }
+    .mp-divider .lbl { writing-mode: vertical-rl; transform: rotate(180deg); font-size: .62rem; letter-spacing: .04em; text-transform: uppercase; color: var(--tblr-secondary-color); white-space: nowrap; }
+    .mp-result { display: inline-flex; align-items: center; gap: .35rem; margin-top: .15rem; }
+    .mp-dir { font-size: .68rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: .12rem .5rem; border-radius: 999px; margin-left: .4rem; }
+    .mp-dir-inbound  { background: rgba(66,153,225,.18); color: #4299e1; }
+    .mp-dir-outbound { background: rgba(247,103,7,.18);  color: #f76707; }
+    .mp-dir-internal { background: rgba(102,115,130,.18); color: var(--tblr-secondary-color); }
+    .mp-dir-relayed  { background: rgba(112,72,232,.18); color: #7048e8; }
     .log-lines-list { max-height: 420px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
     .log-lines-list li { padding: .35rem 1rem; font-family: var(--tblr-font-monospace); font-size: .6875rem; line-height: 1.65; border-bottom: var(--tblr-border-width) solid var(--tblr-border-color); white-space: pre-wrap; word-break: break-all; }
     .log-lines-list li:last-child { border-bottom: none; }
@@ -154,7 +298,26 @@
           <span>Postfix Log Viewer</span>
         </h1>
         <div class="navbar-nav flex-row ms-auto align-items-center">
+          <!-- Multi-server visibility: a chip per forwarding server (distributed mode). -->
+          <span id="header-servers" class="d-none d-lg-flex align-items-center gap-1 me-2"></span>
+          <span class="nav-link text-muted d-none d-lg-inline small text-end lh-sm" id="coverage-nav" style="white-space:normal"></span>
           <span class="nav-link text-muted d-none d-md-inline" id="record-count-nav"></span>
+
+          <!-- Servers / Local Postfix settings -->
+          <button class="btn btn-ghost-secondary btn-icon btn-sm ms-2" onclick="openServers()" title="Servers — local Postfix settings" id="servers-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01M6 18h.01"/>
+            </svg>
+          </button>
+
+          <!-- Row tooltips toggle -->
+          <button class="btn btn-ghost-secondary btn-icon btn-sm ms-2" onclick="toggleRowTips()" title="Toggle row tooltips" id="tips-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/><line x1="8" x2="16" y1="10" y2="10"/><line x1="8" x2="13" y1="14" y2="14"/>
+            </svg>
+          </button>
 
           <!-- Theme toggle -->
           <button class="btn btn-ghost-secondary btn-icon btn-sm ms-2" onclick="cycleTheme()" title="Toggle theme" id="theme-btn">
@@ -206,57 +369,148 @@
           <div class="row row-deck row-cards mb-3" id="stat-cards">
             <div class="col-6 col-sm-4 col-md-3 col-xl">
               <div class="card stats-card clickable" data-filter-status="">
-                <div class="card-body">
-                  <div class="stat-label text-muted">Total Messages</div>
-                  <div class="stat-value" id="stat-total">-</div>
+                <div class="card-body d-flex align-items-center justify-content-between">
+                  <div>
+                    <div class="stat-label text-muted">Total Messages</div>
+                    <div class="stat-value" id="stat-total">-</div>
+                  </div>
+                  <span class="stat-icon text-secondary"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg></span>
                 </div>
               </div>
             </div>
             <div class="col-6 col-sm-4 col-md-3 col-xl">
               <div class="card stats-card clickable border-start border-3 border-success" data-filter-status="sent">
-                <div class="card-body">
-                  <div class="stat-label text-muted">Sent</div>
-                  <div class="stat-value text-success" id="stat-sent">-</div>
+                <div class="card-body d-flex align-items-center justify-content-between">
+                  <div>
+                    <div class="stat-label text-muted">Sent</div>
+                    <div class="stat-value text-success" id="stat-sent">-</div>
+                  </div>
+                  <span class="stat-icon text-success"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/></svg></span>
                 </div>
               </div>
             </div>
             <div class="col-6 col-sm-4 col-md-3 col-xl">
               <div class="card stats-card clickable border-start border-3 border-orange" data-filter-status="spam">
-                <div class="card-body">
-                  <div class="stat-label text-muted">Spam</div>
-                  <div class="stat-value text-orange" id="stat-spam">-</div>
+                <div class="card-body d-flex align-items-center justify-content-between">
+                  <div>
+                    <div class="stat-label text-muted">Spam</div>
+                    <div class="stat-value text-orange" id="stat-spam">-</div>
+                  </div>
+                  <span class="stat-icon text-orange"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></span>
                 </div>
               </div>
             </div>
             <div class="col-6 col-sm-4 col-md-3 col-xl">
               <div class="card stats-card clickable border-start border-3 border-purple" data-filter-status="blocked">
-                <div class="card-body">
-                  <div class="stat-label text-muted">Blocked</div>
-                  <div class="stat-value text-purple" id="stat-blocked">-</div>
+                <div class="card-body d-flex align-items-center justify-content-between">
+                  <div>
+                    <div class="stat-label text-muted">Blocked</div>
+                    <div class="stat-value text-purple" id="stat-blocked">-</div>
+                  </div>
+                  <span class="stat-icon text-purple"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg></span>
                 </div>
               </div>
             </div>
             <div class="col-6 col-sm-4 col-md-3 col-xl">
               <div class="card stats-card clickable border-start border-3 border-danger" data-filter-status="rejected">
-                <div class="card-body">
-                  <div class="stat-label text-muted">Rejected</div>
-                  <div class="stat-value text-danger" id="stat-rejected">-</div>
+                <div class="card-body d-flex align-items-center justify-content-between">
+                  <div>
+                    <div class="stat-label text-muted">Rejected</div>
+                    <div class="stat-value text-danger" id="stat-rejected">-</div>
+                  </div>
+                  <span class="stat-icon text-danger"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg></span>
                 </div>
               </div>
             </div>
             <div class="col-6 col-sm-4 col-md-3 col-xl">
               <div class="card stats-card clickable border-start border-3 border-warning" data-filter-status="bounced">
-                <div class="card-body">
-                  <div class="stat-label text-muted">Bounced</div>
-                  <div class="stat-value text-warning" id="stat-bounced">-</div>
+                <div class="card-body d-flex align-items-center justify-content-between">
+                  <div>
+                    <div class="stat-label text-muted">Bounced</div>
+                    <div class="stat-value text-warning" id="stat-bounced">-</div>
+                  </div>
+                  <span class="stat-icon text-warning"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg></span>
                 </div>
               </div>
             </div>
             <div class="col-6 col-sm-4 col-md-3 col-xl">
               <div class="card stats-card clickable border-start border-3 border-info" data-filter-status="deferred">
-                <div class="card-body">
-                  <div class="stat-label text-muted">Deferred</div>
-                  <div class="stat-value text-info" id="stat-deferred">-</div>
+                <div class="card-body d-flex align-items-center justify-content-between">
+                  <div>
+                    <div class="stat-label text-muted">Deferred</div>
+                    <div class="stat-value text-info" id="stat-deferred">-</div>
+                  </div>
+                  <span class="stat-icon text-info"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
+                </div>
+              </div>
+            </div>
+            <div class="col-6 col-sm-4 col-md-3 col-xl">
+              <div class="card stats-card clickable border-start border-3 border-yellow" data-filter-status="ndr">
+                <div class="card-body d-flex align-items-center justify-content-between">
+                  <div>
+                    <div class="stat-label text-muted">NDR</div>
+                    <div class="stat-value text-yellow" id="stat-ndr">-</div>
+                  </div>
+                  <span class="stat-icon text-yellow"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 13V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v12c0 1.1.9 2 2 2h8"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/><path d="m17 17 4 4"/><path d="m21 17-4 4"/></svg></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Direction cards -->
+          <div class="row row-deck row-cards mb-3" id="direction-cards">
+            <div class="col-6 col-sm-4 col-md-3 col-xl">
+              <div class="card stats-card clickable" data-filter-direction="" style="--accent:var(--tblr-primary)">
+                <div class="card-body d-flex align-items-center justify-content-between">
+                  <div>
+                    <div class="stat-label text-muted">All Directions</div>
+                    <div class="stat-value" id="stat-dir-all">-</div>
+                  </div>
+                  <span class="stat-icon text-secondary"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg></span>
+                </div>
+              </div>
+            </div>
+            <div class="col-6 col-sm-4 col-md-3 col-xl">
+              <div class="card stats-card clickable border-start border-3" data-filter-direction="inbound" style="--accent:#4299e1;border-color:#4299e1!important">
+                <div class="card-body d-flex align-items-center justify-content-between">
+                  <div>
+                    <div class="stat-label text-muted">Inbound</div>
+                    <div class="stat-value" style="color:#4299e1" id="stat-inbound">-</div>
+                  </div>
+                  <span class="stat-icon" style="color:#4299e1"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M3 21h18"/></svg></span>
+                </div>
+              </div>
+            </div>
+            <div class="col-6 col-sm-4 col-md-3 col-xl">
+              <div class="card stats-card clickable border-start border-3" data-filter-direction="outbound" style="--accent:#f76707;border-color:#f76707!important">
+                <div class="card-body d-flex align-items-center justify-content-between">
+                  <div>
+                    <div class="stat-label text-muted">Outbound</div>
+                    <div class="stat-value" style="color:#f76707" id="stat-outbound">-</div>
+                  </div>
+                  <span class="stat-icon" style="color:#f76707"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9"/><path d="m8 13 4-4 4 4"/><path d="M3 3h18"/></svg></span>
+                </div>
+              </div>
+            </div>
+            <div class="col-6 col-sm-4 col-md-3 col-xl">
+              <div class="card stats-card clickable border-start border-3" data-filter-direction="internal" style="--accent:#667382;border-color:#667382!important">
+                <div class="card-body d-flex align-items-center justify-content-between">
+                  <div>
+                    <div class="stat-label text-muted">Internal</div>
+                    <div class="stat-value" style="color:#667382" id="stat-internal">-</div>
+                  </div>
+                  <span class="stat-icon" style="color:#667382"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></span>
+                </div>
+              </div>
+            </div>
+            <div class="col-6 col-sm-4 col-md-3 col-xl">
+              <div class="card stats-card clickable border-start border-3" data-filter-direction="relayed" style="--accent:#7048e8;border-color:#7048e8!important">
+                <div class="card-body d-flex align-items-center justify-content-between">
+                  <div>
+                    <div class="stat-label text-muted">Relayed</div>
+                    <div class="stat-value" style="color:#7048e8" id="stat-relayed">-</div>
+                  </div>
+                  <span class="stat-icon" style="color:#7048e8"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 14 4 4-4 4"/><path d="m18 2 4 4-4 4"/><path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22"/><path d="M2 6h1.972a4 4 0 0 1 3.6 2.2"/><path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45"/></svg></span>
                 </div>
               </div>
             </div>
@@ -266,7 +520,7 @@
           <div class="row row-deck mb-3">
             <div class="col-lg-8">
               <div class="card">
-                <div class="card-header"><h3 class="card-title">Message Volume</h3></div>
+                <div class="card-header"><h3 class="card-title">Message Volume</h3><span class="card-filter-note text-secondary small ms-auto"></span></div>
                 <div class="card-body">
                   <div class="chart-container"><canvas id="timeline-chart"></canvas></div>
                 </div>
@@ -274,7 +528,7 @@
             </div>
             <div class="col-lg-4">
               <div class="card">
-                <div class="card-header"><h3 class="card-title">Status Distribution</h3></div>
+                <div class="card-header"><h3 class="card-title">Status Distribution</h3><span class="card-filter-note text-secondary small ms-auto"></span></div>
                 <div class="card-body">
                   <div class="chart-container"><canvas id="status-chart"></canvas></div>
                 </div>
@@ -286,7 +540,7 @@
           <div class="row row-deck mb-3">
             <div class="col-lg-6">
               <div class="card">
-                <div class="card-header"><h3 class="card-title">Top Senders</h3></div>
+                <div class="card-header"><h3 class="card-title">Top Senders</h3><span class="card-filter-note text-secondary small ms-auto"></span></div>
                 <div class="table-responsive">
                   <table class="table table-vcenter card-table table-sm">
                     <thead><tr><th>Address</th><th class="text-end">Count</th></tr></thead>
@@ -297,7 +551,7 @@
             </div>
             <div class="col-lg-6">
               <div class="card">
-                <div class="card-header"><h3 class="card-title">Top Recipients</h3></div>
+                <div class="card-header"><h3 class="card-title">Top Recipients</h3><span class="card-filter-note text-secondary small ms-auto"></span></div>
                 <div class="table-responsive">
                   <table class="table table-vcenter card-table table-sm">
                     <thead><tr><th>Address</th><th class="text-end">Count</th></tr></thead>
@@ -319,18 +573,25 @@
                     <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
                   </svg>
                   <input type="text" id="global-search" class="form-control" autocomplete="off"
-                         placeholder="Search address, subject, queue ID, message-ID, client, relay, IP…">
+                         placeholder="Search server, address, subject, queue ID, message-ID, client, relay, IP…">
                   <button class="search-clear" id="search-clear" title="Clear search" aria-label="Clear search">&times;</button>
                 </div>
                 <div class="d-flex gap-2 align-items-center justify-content-between justify-content-lg-end">
-                  <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#adv-search" aria-expanded="false" id="adv-toggle">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
-                         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-1">
-                      <line x1="4" x2="20" y1="6" y2="6"/><line x1="7" x2="17" y1="12" y2="12"/><line x1="10" x2="14" y1="18" y2="18"/>
-                    </svg>
-                    Filters
-                    <span class="badge bg-primary ms-1 d-none" id="filter-count"></span>
-                  </button>
+                  <div class="dropdown d-none" id="server-filter-wrap">
+                    <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" id="server-filter-btn">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-1">
+                        <rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><line x1="6" y1="7" x2="6.01" y2="7"/><line x1="6" y1="17" x2="6.01" y2="17"/>
+                      </svg>
+                      Servers
+                      <span class="badge bg-primary ms-1 d-none" id="server-filter-count"></span>
+                    </button>
+                    <div class="dropdown-menu dropdown-menu-end p-2" id="server-filter-menu" style="min-width: 240px;"></div>
+                  </div>
+                  <label class="form-check form-switch m-0 d-none" id="group-toggle-wrap">
+                    <input class="form-check-input" type="checkbox" id="group-toggle">
+                    <span class="form-check-label small">Group relayed</span>
+                  </label>
                   <label class="form-check form-switch m-0">
                     <input class="form-check-input" type="checkbox" id="auto-refresh">
                     <span class="form-check-label small">Live</span>
@@ -348,31 +609,45 @@
                 <button class="chip" data-status="rejected"><span class="chip-dot rejected"></span>Rejected</button>
                 <button class="chip" data-status="bounced"><span class="chip-dot bounced"></span>Bounced</button>
                 <button class="chip" data-status="deferred"><span class="chip-dot deferred"></span>Deferred</button>
+                <button class="chip" data-status="ndr"><span class="chip-dot ndr"></span>NDR</button>
+              </div>
+
+              <!-- Direction filter chips -->
+              <div class="status-chips mt-2" id="direction-chips">
+                <button class="chip active" data-direction="">All directions</button>
+                <button class="chip" data-direction="inbound"><span class="chip-dot dir-inbound"></span>Inbound</button>
+                <button class="chip" data-direction="outbound"><span class="chip-dot dir-outbound"></span>Outbound</button>
+                <button class="chip" data-direction="internal"><span class="chip-dot dir-internal"></span>Internal</button>
+                <button class="chip" data-direction="relayed"><span class="chip-dot dir-relayed"></span>Relayed</button>
               </div>
 
               <!-- Active filter pills -->
               <div class="active-filters mt-3" id="active-filters"></div>
             </div>
 
-            <!-- Advanced filters (collapsed) -->
-            <div class="collapse" id="adv-search">
+            <!-- Advanced filters (always visible; no toggle button) -->
+            <div id="adv-search">
               <div class="card-body border-bottom py-3 bg-body-tertiary">
                 <div class="row g-2">
                   <div class="col-md-4 col-lg-3">
                     <label class="form-label small mb-1">From</label>
-                    <input type="text" class="form-control form-control-sm adv-filter" id="f-from" data-label="From" placeholder="sender address">
+                    <input type="text" class="form-control form-control-sm adv-filter" id="f-from" data-label="From" placeholder="sender address" list="dl-from" autocomplete="off">
                   </div>
                   <div class="col-md-4 col-lg-3">
                     <label class="form-label small mb-1">To</label>
-                    <input type="text" class="form-control form-control-sm adv-filter" id="f-to" data-label="To" placeholder="recipient address">
+                    <input type="text" class="form-control form-control-sm adv-filter" id="f-to" data-label="To" placeholder="recipient address" list="dl-to" autocomplete="off">
+                  </div>
+                  <div class="col-md-4 col-lg-3">
+                    <label class="form-label small mb-1">Subject</label>
+                    <input type="text" class="form-control form-control-sm adv-filter" id="f-subject" data-label="Subject" placeholder="subject contains…" list="dl-subject" autocomplete="off">
                   </div>
                   <div class="col-md-4 col-lg-3">
                     <label class="form-label small mb-1">Client</label>
-                    <input type="text" class="form-control form-control-sm adv-filter" id="f-client" data-label="Client" placeholder="hostname or IP">
+                    <input type="text" class="form-control form-control-sm adv-filter" id="f-client" data-label="Client" placeholder="hostname or IP" list="dl-client" autocomplete="off">
                   </div>
                   <div class="col-md-4 col-lg-3">
                     <label class="form-label small mb-1">Relay</label>
-                    <input type="text" class="form-control form-control-sm adv-filter" id="f-relay" data-label="Relay" placeholder="hostname or IP">
+                    <input type="text" class="form-control form-control-sm adv-filter" id="f-relay" data-label="Relay" placeholder="hostname or IP" list="dl-relay" autocomplete="off">
                   </div>
                   <div class="col-md-4 col-lg-3">
                     <label class="form-label small mb-1">Queue ID</label>
@@ -386,8 +661,9 @@
                       <option value="no">No</option>
                     </select>
                   </div>
-                  <div class="col-6 col-md-4 col-lg-2 d-flex align-items-end">
-                    <button class="btn btn-outline-secondary btn-sm w-100" onclick="clearFilters()">Clear all</button>
+                  <div class="col-6 col-md-4 col-lg-2 d-flex align-items-end gap-2">
+                    <button class="btn btn-primary btn-sm flex-grow-1" id="filter-apply">Apply</button>
+                    <button class="btn btn-outline-secondary btn-sm flex-grow-1" onclick="clearFilters()">Clear all</button>
                   </div>
                 </div>
               </div>
@@ -395,16 +671,32 @@
 
             <!-- status filter driven by chips / stat cards -->
             <input type="hidden" id="f-status" value="">
+            <!-- NDR (non-delivery report) filter, toggled by the NDR stat card -->
+            <input type="hidden" id="f-ndr" value="">
+            <!-- direction filter driven by the direction chips -->
+            <input type="hidden" id="f-direction" value="">
+            <!-- Live autocomplete sources (populated from /api/suggest) -->
+            <datalist id="dl-from"></datalist>
+            <datalist id="dl-to"></datalist>
+            <datalist id="dl-subject"></datalist>
+            <datalist id="dl-client"></datalist>
+            <datalist id="dl-relay"></datalist>
+
+            <!-- Plain-language summary of what the table is currently showing -->
+            <div id="filter-summary" class="px-3 py-2 small border-bottom"></div>
 
             <div class="table-responsive">
-              <table id="log-table" class="table table-vcenter table-striped table-hover card-table" style="width:100%">
+              <table id="log-table" class="table table-vcenter card-table" style="width:100%">
                 <thead>
                   <tr>
                     <th>Time</th>
+                    <th>Direction</th>
                     <th>Queue ID</th>
+                    <th>Server</th>
                     <th>Client</th>
                     <th>From</th>
                     <th>To</th>
+                    <th>Subject</th>
                     <th>Size</th>
                     <th>Status</th>
                     <th>Relay</th>
@@ -420,6 +712,22 @@
   </div>
 
   <!-- Detail Modal -->
+  <!-- Servers / Local Postfix settings -->
+  <div class="modal modal-blur fade" id="servers-modal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <h5 class="modal-title">Servers</h5>
+            <div class="text-secondary small">Local Postfix settings PLV uses to classify mail direction</div>
+          </div>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body" id="servers-body"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="modal modal-blur fade" id="detail-modal" tabindex="-1">
     <div class="modal-dialog modal-xl modal-dialog-scrollable">
       <div class="modal-content">
@@ -431,28 +739,39 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body p-0">
+          <!-- Result / outcome — the headline fact (delivery result, bounce, NDR) -->
+          <div class="px-3 py-3 border-bottom d-none" id="detail-result-row"></div>
           <!-- Hero: Message ID -->
           <div class="px-3 py-3 border-bottom" id="detail-hero"></div>
           <!-- Subject (if present) -->
           <div class="px-3 py-2 border-bottom d-none" id="detail-subject-row"></div>
+          <!-- Mail path visualisation (direction-aware journey) -->
+          <div class="px-3 py-2 border-bottom d-none" id="detail-path-row"></div>
+          <!-- Related on other servers (cross-node, only when present) -->
+          <div class="px-3 py-2 border-bottom d-none" id="detail-related-row"></div>
           <!-- Two columns: Sender / Recipient -->
           <div class="detail-cols border-bottom" id="detail-cols"></div>
           <!-- Scanner / rejection verdict (full width, only when present) -->
           <div class="px-3 py-3 border-bottom d-none" id="detail-scanner-row"></div>
-          <!-- Log lines header -->
-          <div class="px-3 py-2 border-bottom">
-            <div class="detail-col-header mb-0 border-bottom-0 pb-0">
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
-                   stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
-                <polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/>
-                <line x1="16" x2="8" y1="17" y2="17"/><line x1="10" x2="8" y1="9" y2="9"/>
-              </svg>
-              Related Log Lines <span class="text-secondary fw-normal" id="detail-line-count"></span>
+          <!-- Timeline (hidden entirely until a server chip is selected) -->
+          <div id="detail-timeline" class="d-none">
+            <!-- Timeline header -->
+            <div class="px-3 py-2 border-bottom d-flex align-items-center justify-content-between">
+              <div class="detail-col-header mb-0 border-bottom-0 pb-0">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                </svg>
+                Timeline <span class="text-secondary fw-normal" id="detail-line-count"></span>
+              </div>
+              <label class="form-check form-switch m-0">
+                <input class="form-check-input" type="checkbox" id="detail-raw-toggle">
+                <span class="form-check-label small">Show raw</span>
+              </label>
             </div>
+            <!-- Timeline list (clean parsed by default; raw when toggled) -->
+            <ul class="log-lines-list" id="detail-lines"></ul>
           </div>
-          <!-- Log lines list -->
-          <ul class="log-lines-list" id="detail-lines"></ul>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn" data-bs-dismiss="modal">Close</button>
@@ -461,13 +780,69 @@
     </div>
   </div>
 
+  <!-- Hover tooltip for table rows (practical facts; final result for a group) -->
+  <div id="row-tip" class="row-tip"></div>
+
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/js/tabler.min.js"></script>
   <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
   <script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script>
+    // ── Session expiry: redirect to the login with a friendly message instead of
+    // letting an API 401 surface as a raw DataTables "Ajax error" dialog. ──
+    var _sessionGone = false;
+    function sessionExpired() {
+      if (_sessionGone) return;
+      _sessionGone = true;
+      window.location = '/login?expired=1';
+    }
+    // Cover all native fetch() calls (stats, status, suggest, detail, serverconf…).
+    (function () {
+      var _fetch = window.fetch.bind(window);
+      window.fetch = function () {
+        return _fetch.apply(null, arguments).then(function (r) {
+          if (r.status === 401) sessionExpired();
+          return r;
+        });
+      };
+    })();
+    // Cover jQuery/DataTables XHR (the table's server-side ajax).
+    $(document).ajaxError(function (_e, xhr) { if (xhr && xhr.status === 401) sessionExpired(); });
+    if ($.fn.dataTable) $.fn.dataTable.ext.errMode = 'none'; // suppress the native alert
+
     var timelineChart, statusChart, dataTable;
+    var hasOrigins = false; // set from /api/status; toggles the Server column
+    var rowTipsOn = true;   // hover tooltips on table rows (toggled from the header)
+    var NDR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:3px"><path d="M22 13V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v12c0 1.1.9 2 2 2h8"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/><path d="m17 17 4 4"/><path d="m21 17-4 4"/></svg>';
+    var LINK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/></svg>';
+    var MAIL_OUT_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/></svg>';
+    var MAIL_IN_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>';
+    var FLAG_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" x2="4" y1="22" y2="15"/></svg>';
+    var ROUTE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>';
+    var STATUS_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>';
+    var USER_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
+    var SERVER_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01M6 18h.01"/></svg>';
+    var GLOBE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>';
+    var CLOUD_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 1 0 0-9h-1.8A7 7 0 1 0 4 16.7"/><path d="M4 16.7A4 4 0 0 0 6 19h11.5"/></svg>';
+    var MAILBOX_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>';
+    var STOP_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+
+    // Deterministic per-server colour: hash the name to a stable hue. It's derived
+    // from the name (not random/stored), so the same server is always the same
+    // colour across reboots. Rendered theme-aware via the CSS --hue custom property.
+    function hueFor(name) {
+      // Server chips use only the cool/neutral band (blue→indigo→violet→magenta).
+      // This avoids every status colour — green (sent), red (rejected/bounced),
+      // orange/amber (spam/bounced/NDR) — so a server is never mistaken for an outcome.
+      var h = 0, s = name || '';
+      for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 130;
+      return h + 195; // 195 (blue) → 324 (magenta)
+    }
+    function serverBadge(name) {
+      if (!name) return '';
+      return '<span class="srv-badge" style="--hue:' + hueFor(name) + '"><span class="dot"></span>' + esc(name) + '</span>';
+    }
     var statusColors = {
       sent:      { badge: 'bg-success text-success-fg' },
       delivered: { badge: 'bg-success text-success-fg' },
@@ -478,7 +853,8 @@
       reject:    { badge: 'bg-danger text-danger-fg' },
       bounced:   { badge: 'bg-warning text-warning-fg' },
       deferred:  { badge: 'bg-info text-info-fg' },
-      received:  { badge: 'bg-secondary text-secondary-fg' },
+      received:  { badge: 'badge-received' },
+      incomplete:{ badge: 'bg-secondary text-secondary-fg' },
       other:     { badge: 'bg-secondary text-secondary-fg' }
     };
 
@@ -546,42 +922,66 @@
 
     // ── DataTable ────────────────────────────────────────────────
     function initTable() {
-      var savedLen = parseInt(loadSetting('page-length', '50')) || 50;
       dataTable = $('#log-table').DataTable({
         processing: true,
         serverSide: true,
         ajax: { url: '/api/records', data: function(d) {
           d.f_from   = $('#f-from').val();
           d.f_to     = $('#f-to').val();
+          d.f_subject= $('#f-subject').val();
           d.f_client = $('#f-client').val();
           d.f_relay  = $('#f-relay').val();
           d.f_qid    = $('#f-qid').val();
           d.f_status = $('#f-status').val();
           d.f_tls    = $('#f-tls').val();
+          d.f_ndr    = $('#f-ndr').val();
+          d.f_server = serverFilterValue();
+          d.f_direction = $('#f-direction').val();
+          d.group    = (hasOrigins && $('#group-toggle').is(':checked')) ? '1' : '';
         }},
         deferRender: true,
         order: [[0, 'desc']],
-        pageLength: savedLen,
-        lengthMenu: [25, 50, 100, 250],
+        pageLength: 20,
+        lengthChange: false,
+        autoWidth: false, // widths below are authoritative (table-layout: fixed)
         columns: [
-          { data: 0, title: 'Time', width: '150px',
-            render: function(d) { return d ? '<span class="text-nowrap">'+esc(utcToLocal(d))+'</span>' : ''; }
+          { data: 0, title: 'Time', width: '11%',
+            render: function(d) { return d ? esc(utcToLocal(d)) : ''; }
           },
-          { data: 1, title: 'Queue ID', width: '100px',
+          { data: 16, title: 'Direction', width: '7%',
+            render: function(d) {
+              if (!d) return '';
+              var cls = { inbound: 'mp-dir-inbound', outbound: 'mp-dir-outbound', internal: 'mp-dir-internal', relayed: 'mp-dir-relayed' }[d] || 'mp-dir-internal';
+              return '<span class="mp-dir ' + cls + '">' + esc(d) + '</span>';
+            }
+          },
+          { data: 1, title: 'Queue ID', width: '8%',
             render: function(d) { return '<code class="text-muted">'+esc(d)+'</code>'; }
           },
-          { data: 8, title: 'Client',
-            render: function(d) { return '<span title="'+esc(d)+'">'+esc(d)+'</span>'; }
+          { data: 12, title: 'Server', width: '6%', visible: hasOrigins,
+            render: function(d) { return serverBadge(d); }
           },
-          { data: 2, title: 'From',
-            render: function(d) { return '<span title="'+esc(d)+'">'+esc(d)+'</span>'; }
+          { data: 8, title: 'Client', width: '12%',
+            render: function(d) { return esc(d); }
           },
-          { data: 3, title: 'To',
-            render: function(d) { return '<span title="'+esc(d)+'">'+esc(d)+'</span>'; }
+          { data: 2, title: 'From', width: '17%',
+            render: function(d, type, row) {
+              if (row[14] === '1') {
+                var nm = d ? ' <span class="text-muted small">'+esc(d)+'</span>' : '';
+                return '<span class="badge badge-ndr" title="Non-delivery report (null sender)">'+NDR_SVG+'NDR</span>'+nm;
+              }
+              return esc(d);
+            }
           },
-          { data: 4, title: 'Size', width: '70px', className: 'text-end' },
+          { data: 3, title: 'To', width: '12%',
+            render: function(d) { return esc(d); }
+          },
+          { data: 10, title: 'Subject', width: '12%',
+            render: function(d) { return d ? esc(d) : ''; }
+          },
+          { data: 4, title: 'Size', width: '5%', className: 'text-end' },
           {
-            data: 5, title: 'Status', width: '100px',
+            data: 5, title: 'Status', width: '7%',
             render: function(data, type, row) {
               if (!data) return '';
               var key = data.toLowerCase();
@@ -590,8 +990,8 @@
               return '<span class="badge badge-status '+colors.badge+'"'+tip+'>'+esc(data)+'</span>';
             }
           },
-          { data: 7, title: 'Relay',
-            render: function(d) { return '<span title="'+esc(d)+'">'+esc(d)+'</span>'; }
+          { data: 7, title: 'Relay', width: '12%',
+            render: function(d) { return esc(d); }
           }
         ],
         language: {
@@ -599,17 +999,93 @@
           emptyTable: 'No log entries found',
           info: 'Showing _START_ to _END_ of _TOTAL_ entries',
           search: '',
-          searchPlaceholder: 'Search logs...',
-          lengthMenu: '_MENU_ per page'
+          searchPlaceholder: 'Search logs...'
         },
-        dom: "<'row'<'col-12't>>" +
-             "<'row align-items-center mt-2'<'col-auto'l><'col text-muted small'i><'col-auto'p>>"
+        dom: "<'row align-items-center mb-2'<'col text-muted small'i><'col-auto'p>>" +
+             "<'row'<'col-12't>>" +
+             "<'row align-items-center mt-2'<'col text-muted small'i><'col-auto'p>>",
+        drawCallback: function() {
+          // Striping is done here (not Bootstrap's table-striped) so that, when
+          // grouping is on, every correlated row (row[15] = group key) shares one
+          // stripe colour and parity alternates per GROUP — child rows also get a
+          // ↳ tree connector. Sorting/filtering remain per single row.
+          var grouped = hasOrigins && $('#group-toggle').is(':checked');
+          var rows = this.api().rows({ page: 'current' });
+          var data = rows.data(), nodes = rows.nodes();
+          var groupIdx = -1;
+          for (var i = 0; i < data.length; i++) {
+            var $n = $(nodes[i]);
+            $n.removeClass('stripe-alt grp-row grp-first grp-last');
+            if (grouped) {
+              var k = data[i][15];
+              var sameP = i > 0 && data[i - 1][15] === k;
+              var sameN = i < data.length - 1 && data[i + 1][15] === k;
+              if (!sameP) groupIdx++;                       // start of a new group
+              if (groupIdx % 2 === 0) $n.addClass('stripe-alt'); // tint alternate groups
+              if (sameP || sameN) {                         // multi-row correlation group
+                $n.addClass('grp-row');
+                if (!sameP) $n.addClass('grp-first');        // rail starts here
+                if (!sameN) $n.addClass('grp-last');         // rail ends here
+              }
+            } else if (i % 2 === 0) {
+              $n.addClass('stripe-alt');                    // plain per-row striping
+            }
+          }
+          // A correlation group that spills onto an adjacent page: run the rail off the
+          // page edge instead of the styling vanishing. The first row of a group that
+          // continues BELOW gets grp-first (rail from its mid-point down off the edge);
+          // the last row of a group continuing ABOVE gets grp-last (rail from the top
+          // edge down to its mid-point). A mid-group straddler keeps a full-height rail.
+          if (grouped && data.length) {
+            var resp = this.api().ajax.json() || {};
+            if (resp.continues_below) {
+              var li = data.length - 1, $l = $(nodes[li]);
+              var sameP = li > 0 && data[li - 1][15] === data[li][15];
+              $l.addClass('grp-row grp-cont-bottom').removeClass('grp-last');
+              if (sameP) { $l.removeClass('grp-first'); } else { $l.addClass('grp-first'); }
+            }
+            if (resp.continues_above) {
+              var $f = $(nodes[0]);
+              var sameN = data.length > 1 && data[1][15] === data[0][15];
+              $f.addClass('grp-row grp-cont-top').removeClass('grp-first');
+              if (sameN) { $f.removeClass('grp-last'); } else { $f.addClass('grp-last'); }
+            }
+          }
+          syncNativeTitles();
+        }
       });
-      dataTable.on('length.dt', function(e, settings, len) { saveSetting('page-length', len); });
 
       $('#log-table tbody').on('click', 'tr', function() {
         var row = dataTable.row(this).data();
-        if (row && row[1]) openDetail(row[1]);
+        if (row && row[1]) openDetail(row[1], row[12]);
+      });
+
+      // Hover the whole correlation group together, and (if enabled) show a tooltip
+      // with the row's practical facts — the group's FINAL result for correlated rows.
+      $('#log-table tbody').on('mouseenter', 'tr', function(e) {
+        var grouped = hasOrigins && $('#group-toggle').is(':checked');
+        var data = dataTable.row(this).data();
+        if (!data) return;
+        // Gather every current-page row of this message (by group key) so the tooltip's
+        // Result reflects the whole message — matching the modal — not just one leg.
+        var k = data[15], groupRows = [];
+        dataTable.rows({ page: 'current' }).every(function() {
+          var dd = this.data();
+          if (dd[15] === k) { groupRows.push(dd); if (grouped) $(this.node()).addClass('grp-hover'); }
+        });
+        if (!groupRows.length) groupRows = [data];
+        if (!grouped) $(this).addClass('grp-hover');
+        if (rowTipsOn) {
+          var tip = document.getElementById('row-tip');
+          tip.innerHTML = buildRowTip(data, groupRows);
+          tip.style.display = 'block';
+          positionTip(e);
+        }
+      }).on('mousemove', 'tr', function(e) {
+        if (rowTipsOn) positionTip(e);
+      }).on('mouseleave', 'tr', function() {
+        $('#log-table tbody tr.grp-hover').removeClass('grp-hover');
+        document.getElementById('row-tip').style.display = 'none';
       });
 
       wireSearch();
@@ -628,46 +1104,95 @@
     function wireSearch() {
       var box = document.getElementById('global-search');
       var clear = document.getElementById('search-clear');
-      var reloadSearch = debounce(function() {
-        dataTable.search(box.value).draw();
-        renderActiveFilters();
-      }, 250);
+      // No live rendering while typing — search/filters apply only on Apply or Enter,
+      // so the table never re-renders (and shifts) under the cursor / autocomplete.
       box.addEventListener('input', function() {
         box.parentElement.classList.toggle('has-value', box.value !== '');
-        reloadSearch();
       });
       clear.addEventListener('click', function() {
         box.value = '';
         box.parentElement.classList.remove('has-value');
         box.focus();
-        dataTable.search('').draw();
-        renderActiveFilters();
+        applyFilters();
+      });
+
+      // Apply button + Enter in any search/filter field commit the pending filters.
+      $('#filter-apply').on('click', applyFilters);
+      $('#global-search, input.adv-filter').on('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); applyFilters(); }
       });
 
       // Status chips
       $('#status-chips .chip').on('click', function() { setStatus($(this).data('status')); });
+      // Direction chips
+      $('#direction-chips .chip').on('click', function() { setDirection($(this).data('direction')); });
 
       // Stat cards filter the table on click
       $('#stat-cards .stats-card.clickable').on('click', function() {
-        setStatus($(this).data('filterStatus') || '');
-        document.querySelector('.table-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        var st = $(this).data('filterStatus') || '';
+        if (st === '') { clearFilters(); }  // "Total Messages" = everything → clear ALL filters
+        else { setStatus(st); }
+      });
+      $('#direction-cards .stats-card.clickable').on('click', function() {
+        setDirection($(this).data('filterDirection') || '');  // "All Directions" → clears f_direction
       });
 
-      // Advanced filters apply live (debounced)
-      var liveApply = debounce(applyFilters, 300);
-      $('.adv-filter').on('input change', liveApply);
+      // Refresh autocomplete when a filter field gains focus.
+      $('input.adv-filter, #global-search').on('focus', populateSuggestions);
+
+      // Group-relayed toggle reorders the table to cluster correlated rows.
+      $('#group-toggle').on('change', function() {
+        saveSetting('group-relayed', this.checked);
+        if (dataTable) dataTable.ajax.reload();
+      });
     }
 
     function setStatus(status) {
       status = status || '';
-      $('#f-status').val(status);
+      // NDR is a pseudo-status (orthogonal) but behaves like the others in the chip
+      // row: selecting it sets f_ndr and clears f_status, and any real status clears f_ndr.
+      if (status === 'ndr') { $('#f-ndr').val('yes'); $('#f-status').val(''); }
+      else { $('#f-status').val(status); $('#f-ndr').val(''); }
       $('#status-chips .chip').each(function() {
         $(this).toggleClass('active', ($(this).data('status') || '') === status);
       });
-      $('#stat-cards .stats-card').each(function() {
-        $(this).toggleClass('is-active', ($(this).data('filterStatus') || '') === status && status !== '');
+      applyFilters();
+    }
+
+    function setDirection(dir) {
+      dir = dir || '';
+      $('#f-direction').val(dir);
+      $('#direction-chips .chip').each(function() {
+        $(this).toggleClass('active', ($(this).data('direction') || '') === dir);
       });
       applyFilters();
+    }
+
+    // Is ANY filter active at all (status / direction / NDR / search / advanced / server)?
+    function anyFilterActive() {
+      if (($('#f-status').val() || '') !== '' || $('#f-ndr').val() === 'yes' || ($('#f-direction').val() || '') !== '') return true;
+      if (((document.getElementById('global-search') || {}).value || '').trim()) return true;
+      if (serverFilterValue()) return true;
+      var any = false;
+      $('.adv-filter').each(function() { if ($(this).val()) any = true; });
+      return any;
+    }
+
+    // Card active states. "All" cards (Total Messages, All Directions) light up only when
+    // their category has no filter — Total Messages additionally requires NO filter at all.
+    // Specific cards light up when they ARE the active value for their category.
+    function updateCardActives() {
+      var curStatus = ($('#f-ndr').val() === 'yes') ? 'ndr' : ($('#f-status').val() || '');
+      var noFilters = !anyFilterActive();
+      $('#stat-cards .stats-card[data-filter-status]').each(function() {
+        var fs = $(this).data('filterStatus') || '';
+        $(this).toggleClass('is-active', fs === '' ? noFilters : fs === curStatus);
+      });
+      var curDir = $('#f-direction').val() || '';
+      $('#direction-cards .stats-card[data-filter-direction]').each(function() {
+        var fd = $(this).attr('data-filter-direction') || '';
+        $(this).toggleClass('is-active', fd === curDir);
+      });
     }
 
     function getActiveFilterCount() {
@@ -678,20 +1203,70 @@
     function updateFilterBadge() {
       var n = getActiveFilterCount();
       var badge = document.getElementById('filter-count');
+      if (!badge) return;
       if (n > 0) { badge.textContent = n; badge.classList.remove('d-none'); }
       else { badge.classList.add('d-none'); }
     }
     function applyFilters() {
       updateFilterBadge();
       renderActiveFilters();
-      if (dataTable) dataTable.ajax.reload();
+      renderFilterSummary();
+      updateCardActives();
+      if (dataTable) {
+        // Commit the search box into the table's search state, then one reload sends
+        // both the search term and the f_* filter params to the server.
+        dataTable.search(document.getElementById('global-search').value || '');
+        dataTable.ajax.reload();
+      }
+      loadStats();
+    }
+
+    // The active-filter description, as a list of short parts. Shared by the table
+    // summary line and the per-graph filter notes so they always agree.
+    function activeFilterParts() {
+      var parts = [];
+      if ($('#f-ndr').val() === 'yes') parts.push('non-delivery reports (NDR)');
+      else { var st = $('#f-status').val(); if (st) parts.push('status: ' + st); }
+      var dir = $('#f-direction').val(); if (dir) parts.push('direction: ' + dir);
+      var search = (document.getElementById('global-search').value || '').trim();
+      if (search) parts.push('matching “' + search + '”');
+      var sv = serverFilterValue(); if (sv) parts.push('server: ' + sv.split(',').join(', '));
+      $('.adv-filter').each(function() {
+        var v = $(this).val();
+        if (v) parts.push(($(this).data('label') || this.id) + ': ' + v);
+      });
+      return parts;
+    }
+
+    // Plain-language description of the active filters, shown above the table AND as a
+    // small note on every graph / top-N card so it's clear what each is reflecting.
+    function renderFilterSummary() {
+      var parts = activeFilterParts();
+      var el = document.getElementById('filter-summary');
+      if (el) {
+        if (!parts.length) {
+          el.innerHTML = '<span class="text-secondary">Showing</span> <strong>all messages</strong>';
+        } else {
+          el.innerHTML = '<span class="text-secondary">Showing messages</span> — ' +
+            parts.map(function(p) { return '<strong>' + esc(p) + '</strong>'; })
+                 .join('<span class="text-secondary"> · </span>');
+        }
+      }
+      var note = parts.length
+        ? esc(parts.join(' · '))
+        : '<span class="text-secondary">all messages</span>';
+      document.querySelectorAll('.card-filter-note').forEach(function(n) { n.innerHTML = note; });
     }
     function clearFilters() {
       $('.adv-filter').val('');
       var gs = document.getElementById('global-search');
       if (gs) { gs.value = ''; gs.parentElement.classList.remove('has-value'); }
-      if (dataTable) dataTable.search('');
-      setStatus('');           // resets chips + reloads via applyFilters
+      // Reset the direction chips (without an extra reload) ...
+      $('#f-direction').val('');
+      $('#direction-chips .chip').each(function() { $(this).toggleClass('active', !$(this).data('direction')); });
+      // ... clear search AND reset sorting to the default (time, newest first) ...
+      if (dataTable) { dataTable.search(''); dataTable.order([0, 'desc']); }
+      setStatus('');           // ... then reload once via applyFilters (carries the reset sort)
     }
 
     // Render removable pills summarizing every active filter.
@@ -701,13 +1276,17 @@
       if (search) pills.push({ kind: 'search', label: 'Search', value: search });
       var status = $('#f-status').val();
       if (status) pills.push({ kind: 'status', label: 'Status', value: status });
+      if ($('#f-ndr').val() === 'yes') pills.push({ kind: 'ndr', label: 'Filter', value: 'NDR' });
+      var direction = $('#f-direction').val();
+      if (direction) pills.push({ kind: 'direction', label: 'Direction', value: direction });
       $('.adv-filter').each(function() {
         var v = $(this).val();
         if (v) pills.push({ kind: 'adv', id: this.id, label: $(this).data('label') || this.id, value: v });
       });
 
       var html = pills.map(function(p, i) {
-        return '<span class="filter-pill"><b>' + esc(p.label) + ':</b> ' + esc(p.value) +
+        var body = (p.kind === 'ndr') ? esc(p.value) : ('<b>' + esc(p.label) + ':</b> ' + esc(p.value));
+        return '<span class="filter-pill">' + body +
                '<button class="pill-x" data-i="' + i + '" title="Remove">&times;</button></span>';
       }).join('');
       if (pills.length > 1) {
@@ -722,13 +1301,73 @@
           gs.value = ''; gs.parentElement.classList.remove('has-value');
           dataTable.search('').draw();
           renderActiveFilters();
-        } else if (p.kind === 'status') {
+        } else if (p.kind === 'status' || p.kind === 'ndr') {
           setStatus('');
+        } else if (p.kind === 'direction') {
+          setDirection('');
         } else {
           $('#' + p.id).val('');
           applyFilters();
         }
       });
+    }
+
+    // ── Row hover tooltip ────────────────────────────────────────
+    function toggleRowTips() {
+      rowTipsOn = !rowTipsOn;
+      saveSetting('row-tips', rowTipsOn);
+      document.getElementById('tips-btn').classList.toggle('active', rowTipsOn);
+      if (!rowTipsOn) document.getElementById('row-tip').style.display = 'none';
+      syncNativeTitles();
+    }
+    function buildRowTip(row, groupRows) {
+      // Final outcome = the latest leg by time (same as the modal's headline), so the
+      // tooltip shows e.g. "delivered", not a relaying hop's "sent".
+      var fin = groupRows.slice().sort(function(a, b) {
+        var x = a[0] || '', y = b[0] || ''; return x < y ? -1 : (x > y ? 1 : 0);
+      }).pop();
+      var disp = fin[5] || '';
+      var sc = statusColors[disp.toLowerCase()] || statusColors.other;
+      // Order the server chips chronologically (first hop first) by leg timestamp.
+      var servers = [];
+      groupRows.slice().sort(function(a, b) {
+        var x = a[0] || '', y = b[0] || ''; return x < y ? -1 : (x > y ? 1 : 0);
+      }).forEach(function(g) { if (g[12] && servers.indexOf(g[12]) < 0) servers.push(g[12]); });
+      var h = '';
+      if (servers.length) h += '<div class="rt-head">' + servers.map(function(s) { return serverBadge(s); }).join('') + '</div>';
+      if (row[2]) h += '<div class="rt-row"><span class="rt-k">From</span><span class="rt-v">' + esc(row[2]) + '</span></div>';
+      if (row[3]) h += '<div class="rt-row"><span class="rt-k">To</span><span class="rt-v">' + esc(row[3]) + '</span></div>';
+      if (row[10]) h += '<div class="rt-row"><span class="rt-k">Subject</span><span class="rt-v">' + esc(row[10]) + '</span></div>';
+      // Result: the status badge sits in the value column under the label; the raw
+      // status text wraps below it (not under the "Result" label itself).
+      var rtext = fin[6] || '';
+      if (disp || rtext) {
+        h += '<div class="rt-result"><span class="rt-k">Result</span><span class="rt-v">' +
+             (disp ? '<span class="badge ' + sc.badge + '">' + esc(disp) + '</span>' : '') +
+             (rtext ? '<div class="rt-result-text">' + esc(rtext) + '</div>' : '') +
+             '</span></div>';
+      }
+      return h;
+    }
+    function positionTip(e) {
+      var t = document.getElementById('row-tip');
+      var w = t.offsetWidth, h = t.offsetHeight;
+      var x = e.clientX + 16, y = e.clientY + 16;
+      if (x + w > window.innerWidth - 12) x = e.clientX - w - 16;
+      if (y + h > window.innerHeight - 12) y = window.innerHeight - h - 12;
+      t.style.left = Math.max(8, x) + 'px';
+      t.style.top = Math.max(8, y) + 'px';
+    }
+    // When the custom tooltip is on, suppress native title="" tooltips in the table
+    // (they overlap). Titles are stashed in data-title and restored when toggled off.
+    function syncNativeTitles() {
+      var t = document.getElementById('log-table');
+      if (!t) return;
+      if (rowTipsOn) {
+        t.querySelectorAll('[title]').forEach(function(el) { el.setAttribute('data-title', el.getAttribute('title')); el.removeAttribute('title'); });
+      } else {
+        t.querySelectorAll('[data-title]').forEach(function(el) { el.setAttribute('title', el.getAttribute('data-title')); el.removeAttribute('data-title'); });
+      }
     }
 
     // ── Detail Modal ─────────────────────────────────────────────
@@ -745,31 +1384,452 @@
       return detailModal;
     }
 
-    function openDetail(queueId) {
-      fetch('/api/detail?qid=' + encodeURIComponent(queueId))
+    // Detail state: every record sharing this Message-ID (group), collapsed to the
+    // DISTINCT servers (origins) involved — a server may hold several records when a
+    // bulk sender reuses a Message-ID. Selection is per-server; cache is keyed by
+    // origin|qid.
+    var detailState = { selected: {}, cache: {}, group: [], origins: [], primary: '' };
+    function dkey(origin, qid) { return (origin || '') + '|' + qid; }
+
+    function fetchDetail(origin, qid, cb) {
+      var key = dkey(origin, qid);
+      if (detailState.cache[key]) { cb(detailState.cache[key]); return; }
+      fetch('/api/detail?qid=' + encodeURIComponent(qid) + '&origin=' + encodeURIComponent(origin || ''))
         .then(function(r) { return r.json(); })
-        .then(function(d) { renderDetail(d); })
+        .then(function(d) { detailState.cache[key] = d; cb(d); })
         .catch(function(e) { console.error('detail fetch error:', e); });
     }
 
-    function field(label, value) {
-      return '<div class="detail-field"><div class="detail-label">' + esc(label) + '</div>' +
-             '<div class="detail-value">' + (value ? esc(value) : '') + '</div></div>';
+    // Fetch every record of one server in the group so all its lines are available.
+    function ensureOrigin(origin, cb) {
+      var recs = detailState.group.filter(function(g) { return g.origin === origin; });
+      var pending = recs.length;
+      if (!pending) { cb(); return; }
+      recs.forEach(function(g) { fetchDetail(g.origin, g.qid, function() { if (--pending === 0) cb(); }); });
     }
 
-    function renderDetail(d) {
-      var disposition = d.disposition || d.status || '';
-      var statusKey = disposition.toLowerCase();
-      var sc = statusColors[statusKey] || statusColors.other;
+    var detailPollTimer = null;
 
-      // Header \u2014 show the effective disposition (e.g. "spam"), not the raw "sent".
+    function openDetail(queueId, origin) {
+      var key = dkey(origin, queueId);
+      detailState = { selected: {}, cache: {}, group: [], origins: [], known: {}, primary: key, sig: '' };
+      fetchDetail(origin, queueId, function(d) {
+        rebuildGroup(d);
+        // Default: NO server selected, so the timeline starts hidden — the user taps a
+        // server chip in the mail path to reveal its log lines. Mark all known so a
+        // live refresh doesn't auto-select them.
+        detailState.origins.forEach(function(o) { detailState.known[o.origin] = true; });
+        var pending = detailState.group.length;
+        var done = function() {
+          if (--pending > 0) return;
+          renderDetail();
+          detailState.sig = detailSig();
+          getDetailModal().show();
+          clearInterval(detailPollTimer);
+          detailPollTimer = setInterval(refreshDetail, 5000); // live-update while open
+        };
+        detailState.group.forEach(function(g) { fetchDetail(g.origin, g.qid, done); });
+      });
+    }
+
+    // Build the message group (records sharing the Message-ID) + distinct servers.
+    function rebuildGroup(d) {
+      var group = [{ origin: d.origin || '', qid: d.queue_id, disposition: d.disposition || d.status || '', timestamp: d.timestamp }];
+      (d.related || []).forEach(function(it) {
+        group.push({ origin: it.origin || '', qid: it.queue_id, disposition: it.disposition || '', timestamp: it.timestamp });
+      });
+      detailState.group = group;
+      var seen = {};
+      detailState.origins = [];
+      group.forEach(function(g) {
+        if (!seen[g.origin]) { seen[g.origin] = { origin: g.origin, recs: [] }; detailState.origins.push(seen[g.origin]); }
+        seen[g.origin].recs.push(g);
+      });
+      // Order the server chips by each server's earliest leg, so they read in the
+      // message's actual hop order (e.g. the inbound gateway before the mailbox host).
+      var earliest = function(recs) {
+        return recs.reduce(function(m, r) {
+          var t = r.timestamp || '￿';
+          return t < m ? t : m;
+        }, '￿');
+      };
+      detailState.origins.sort(function(a, b) {
+        var ta = earliest(a.recs), tb = earliest(b.recs);
+        return ta < tb ? -1 : (ta > tb ? 1 : 0);
+      });
+    }
+
+    // Signature of the visible state, to skip re-rendering when nothing changed.
+    function detailSig() {
+      var lines = 0;
+      detailState.group.forEach(function(g) {
+        if (detailState.selected[g.origin]) { var dd = detailState.cache[dkey(g.origin, g.qid)]; if (dd && dd.lines) lines += dd.lines.length; }
+      });
+      return detailState.group.length + ':' + lines;
+    }
+
+    // Live refresh: re-fetch the open message; if a new leg/server or new log lines
+    // arrived (forwarders stream continuously), re-render — only on actual change.
+    function refreshDetail() {
+      if (!detailState.primary) return;
+      var i = detailState.primary.indexOf('|');
+      var po = detailState.primary.slice(0, i), pq = detailState.primary.slice(i + 1);
+      fetch('/api/detail?qid=' + encodeURIComponent(pq) + '&origin=' + encodeURIComponent(po))
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (!d || !d.queue_id) return;
+          detailState.cache[detailState.primary] = d;
+          rebuildGroup(d);
+          detailState.origins.forEach(function(o) {
+            if (!detailState.known[o.origin]) { detailState.known[o.origin] = true; }
+          });
+          var sel = detailState.group.filter(function(g) { return detailState.selected[g.origin]; });
+          var pending = sel.length || 1;
+          var done = function() {
+            if (--pending > 0) return;
+            var sig = detailSig();
+            if (sig !== detailState.sig) { detailState.sig = sig; renderDetail(); }
+          };
+          if (!sel.length) { done(); return; }
+          sel.forEach(function(g) {
+            fetch('/api/detail?qid=' + encodeURIComponent(g.qid) + '&origin=' + encodeURIComponent(g.origin))
+              .then(function(r) { return r.json(); })
+              .then(function(dd) { detailState.cache[dkey(g.origin, g.qid)] = dd; done(); })
+              .catch(done);
+          });
+        }).catch(function() {});
+    }
+
+    // Toggle a server: keeps at least one selected; fetches all its records first.
+    function toggleServer(origin) {
+      if (detailState.selected[origin]) {
+        delete detailState.selected[origin]; // allow going back to zero → timeline hides
+        renderDetail();
+      } else {
+        ensureOrigin(origin, function() { detailState.selected[origin] = true; renderDetail(); });
+      }
+    }
+
+    // Every cached record whose server is selected, ordered by time ascending.
+    function selectedDetails() {
+      var arr = [];
+      detailState.group.forEach(function(g) {
+        if (detailState.selected[g.origin]) { var dd = detailState.cache[dkey(g.origin, g.qid)]; if (dd) arr.push(dd); }
+      });
+      arr.sort(function(a, b) { var x = a.timestamp || '', y = b.timestamp || ''; return x < y ? -1 : (x > y ? 1 : 0); });
+      return arr;
+    }
+
+    // parseLogLine strips the syslog/process noise (timestamp, host, postfix/x[pid]:,
+    // leading queue id) for the clean timeline view, leaving stage + event text.
+    function parseLogLine(raw) {
+      if (raw.indexOf('rspamd_task_write_log') !== -1) {
+        var rm = raw.match(/rspamd_task_write_log:\s*(.*)$/);
+        return { stage: 'rspamd', text: rm ? rm[1] : raw };
+      }
+      var m = raw.match(/^\S+\s+\S+\s+(\S+?)(?:\[\d+\])?:\s*(.*)$/);
+      if (!m) return { stage: '', text: raw };
+      return { stage: m[1].replace(/^postfix\//, ''), text: m[2].replace(/^[A-Fa-f0-9]{6,}:\s*/, '') };
+    }
+
+    function field(label, value) {
+      if (!value) return ''; // omit empty fields entirely (esp. for sparse NDR/bounce records)
+      return '<div class="detail-field"><div class="detail-label">' + esc(label) + '</div>' +
+             '<div class="detail-value">' + esc(value) + '</div></div>';
+    }
+
+    // ── Mail path visualisation ──────────────────────────────────
+    // Reconstructs the message's journey from the (already-fetched) legs and
+    // classifies its direction purely from log facts — public/private client & relay
+    // IPs, SASL auth, and local-delivery markers — so it works for any Postfix setup,
+    // not just this one. Correlation in the modal is unaffected (keyed on Message-ID).
+    function mpExtractIP(s) { var m = /\[([0-9a-fA-F:.]+)\]/.exec(s || ''); return m ? m[1] : ''; }
+    function mpHostOnly(s) { if (!s) return ''; var h = String(s).replace(/\[.*$/, '').trim(); return h || mpExtractIP(s); }
+    function mpIsPrivate(ip) {
+      if (!ip) return true; // no IP (local/pipe delivery) → treat as internal
+      if (ip.indexOf(':') !== -1) { var l = ip.toLowerCase(); return l === '::1' || l.indexOf('fe80') === 0 || l[0] === 'f' && (l[1] === 'c' || l[1] === 'd'); }
+      var p = ip.split('.').map(Number);
+      if (p.length !== 4 || p.some(isNaN)) return true;
+      if (p[0] === 10 || p[0] === 127) return true;
+      if (p[0] === 192 && p[1] === 168) return true;
+      if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;
+      if (p[0] === 169 && p[1] === 254) return true;
+      if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return true; // CGNAT
+      return false;
+    }
+    function mpIsPublic(ip) { return !!ip && !mpIsPrivate(ip); }
+    function mpHasAuth(leg) { return (leg.lines || []).some(function(l) { return /sasl_username=/.test(l.raw); }); }
+    function mpDeliversLocal(leg) {
+      var r = (leg.relay || '').toLowerCase();
+      if (/dovecot|lmtp|virtual|cyrus|maildrop/.test(r) || /(^|[\/\[])local([\/\]]|$)/.test(r)) return true;
+      var sd = (leg.status_detail || '').toLowerCase();
+      return /\bsaved\b/.test(sd) || /delivered to (mailbox|maildir|command|file)/.test(sd);
+    }
+    // Every cached leg detail for the open message, earliest first.
+    function mpLegs() {
+      var arr = [];
+      detailState.group.forEach(function(g) { var d = detailState.cache[dkey(g.origin, g.qid)]; if (d) arr.push(d); });
+      arr.sort(function(a, b) { var x = a.timestamp || '', y = b.timestamp || ''; return x < y ? -1 : (x > y ? 1 : 0); });
+      return arr;
+    }
+    // Mirrors direction.go: a "relayed" message has a single un-filtered leg that both
+    // received from a public client (unauth) and sent straight back out to a public host
+    // (no local delivery, no content-filter accept/reinject merge) — transit through us.
+    function mpReinjected(leg) {
+      return !!leg.delivery_queue_id || (leg.lines || []).some(function(l) { return /orig_client=/.test(l.raw); });
+    }
+    function mpDirection(legs) {
+      var inbound = false, publicSend = false, local = false, relay = false;
+      legs.forEach(function(l) {
+        var inLeg = mpIsPublic(mpExtractIP(l.client)) && !mpHasAuth(l);
+        var outLeg = mpIsPublic(mpExtractIP(l.relay)) && !mpDeliversLocal(l);
+        if (inLeg) inbound = true;
+        if (outLeg) publicSend = true;
+        if (mpDeliversLocal(l)) local = true;
+        if (inLeg && outLeg && !mpReinjected(l)) relay = true;
+      });
+      if (relay && !local) return 'relayed';
+      return inbound ? 'inbound' : (publicSend ? 'outbound' : 'internal');
+    }
+    function mpIconNode(svg, label, sub, cls, title) {
+      return '<div class="mp-node ' + (cls || '') + '"><div class="mp-icon"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + svg + '</div>' +
+        '<div class="mp-label">' + esc(label) + '</div>' + (sub ? '<div class="mp-sub">' + esc(sub) + '</div>' : '') + '</div>';
+    }
+    // What this server actually DID with the message — aggregated over its legs and
+    // ignoring the content-filter loopback (status=sent to 127.0.0.1 is plumbing, not
+    // an outcome). So an inbound gateway reads "received", a mailbox host "delivered".
+    function mpServerRole(o, dir) {
+      var legs = (o.recs || []).map(function(g) { return detailState.cache[dkey(g.origin, g.qid)]; }).filter(Boolean);
+      if (!legs.length) return o.recs[0] ? (o.recs[0].disposition || '') : '';
+      if (legs.some(mpDeliversLocal)) return 'delivered';
+      // Only an OUTBOUND message has a hop that "sent" it OUT to the internet. For
+      // INBOUND/INTERNAL the gateway is relaying inward — that's "received", never "sent".
+      if (dir === 'outbound' && legs.some(function(l) { return mpIsPublic(mpExtractIP(l.relay)) && !mpDeliversLocal(l); })) return 'sent';
+      // If the server queued the message (a from=…, size=… line — the reliable signal
+      // for INBOUND), it RECEIVED it. A later block/spam/defer is the message's RESULT
+      // (the terminal node), not this hop's action — so the chip reads "received". A
+      // NOQUEUE reject carries a from= but was refused at RCPT (never queued), so it is
+      // NOT "received" — it falls through to the terminal disposition ("rejected").
+      if (legs.some(function(l) { return (l.size_bytes || 0) > 0 || ((l.from || '') !== '' && (l.filter_action || '') !== 'noqueue-reject'); })) return 'received';
+      // Never queued (no size= — aborted/probe session, or a NOQUEUE reject): the
+      // disposition (incomplete/rejected/blocked/…) is the hop's real status, NOT "received".
+      var terminal = ['blocked', 'rejected', 'reject', 'virus', 'spam', 'bounced', 'deferred', 'incomplete'];
+      var bad = '';
+      legs.forEach(function(l) { var d = (l.disposition || '').toLowerCase(); if (terminal.indexOf(d) !== -1) bad = d; });
+      return bad || 'received';
+    }
+    function mpServerNode(o, dir) {
+      var on = !!detailState.selected[o.origin];
+      var role = mpServerRole(o, dir);
+      var dsc = statusColors[role] || statusColors.other;
+      var badge = role ? '<span class="badge ' + dsc.badge + '">' + esc(role) + '</span>' : '';
+      // Single-node (standalone) view: there's no server identity to show, so render a
+      // neutral, clickable server node instead of a "?" chip.
+      if (!hasOrigins) {
+        return '<div class="mp-node mp-server">' +
+          '<button type="button" class="mp-icon mp-srv-plain' + (on ? ' on' : '') + '"' +
+            ' onclick="toggleServer(\'' + esc(o.origin) + '\')" title="this server — tap to view the log timeline">' + SERVER_SVG + '</button>' +
+          badge + '</div>';
+      }
+      return '<div class="mp-node mp-server">' +
+        '<button type="button" class="srv-chip mp-srv' + (on ? ' on' : '') + '" style="--hue:' + hueFor(o.origin) + '"' +
+          ' onclick="toggleServer(\'' + esc(o.origin) + '\')">' +
+          '<span class="dot"></span><strong>' + esc(o.origin || '?') + '</strong></button>' +
+        badge +
+      '</div>';
+    }
+    function mpConn(dashed, cloud) {
+      return '<div class="mp-conn' + (dashed ? ' dashed' : '') + '"><div class="line"></div>' +
+        (cloud ? '<div class="mp-cloud">' + CLOUD_SVG + '</div>' : '') + '<div class="arrow"></div></div>';
+    }
+    function mpDivider() {
+      return '<div class="mp-divider"><div class="bar"></div><div class="lbl">our control</div><div class="bar"></div></div>';
+    }
+    function renderMailPath() {
+      var host = document.getElementById('detail-path-row');
+      if (!host) return;
+      var legs = mpLegs();
+      var servers = detailState.origins;
+      if (!legs.length || !servers.length) { host.classList.add('d-none'); host.innerHTML = ''; return; }
+      var primary = detailState.cache[detailState.primary] || legs[0];
+      // Prefer the server-computed direction (mynetworks / local-domain aware) so the path
+      // agrees with the table; fall back to the client heuristic if it's absent.
+      var dir = primary.direction || mpDirection(legs);
+      var last = legs[legs.length - 1];
+      var parts = [];
+
+      if (dir === 'inbound' || dir === 'relayed') {
+        var entry = legs.filter(function(l) { return mpIsPublic(mpExtractIP(l.client)) && !mpHasAuth(l); })[0] || legs[0];
+        // External sender: show the ORIGINAL envelope FROM (the inbound-entry leg's),
+        // not a later SRS-rewritten one, regardless of which leg was opened. Host on hover.
+        parts.push(mpIconNode(GLOBE_SVG, entry.from || primary.from || mpHostOnly(entry.client) || 'External sender', 'external sender', 'mp-ext', entry.client));
+        parts.push(mpConn(true, true));
+        parts.push(mpDivider());
+      } else {
+        var senderLbl = legs[0].from || primary.from || mpHostOnly(legs[0].client) || 'Sender';
+        parts.push(mpIconNode(USER_SVG, senderLbl, dir === 'internal' ? 'internal sender' : 'sender', 'mp-user', legs[0].client));
+        parts.push(mpConn(false, false));
+      }
+
+      servers.forEach(function(o, i) {
+        parts.push(mpServerNode(o, dir));
+        if (i < servers.length - 1) parts.push(mpConn(false, false));
+      });
+
+      if (dir === 'outbound' || dir === 'relayed') {
+        var sendLeg = legs.filter(function(l) { return mpIsPublic(mpExtractIP(l.relay)) && !mpDeliversLocal(l); }).slice(-1)[0] || last;
+        parts.push(mpDivider());
+        parts.push(mpConn(true, true));
+        var rDisp = sendLeg.disposition || sendLeg.status || '';
+        var rsc = statusColors[rDisp.toLowerCase()] || statusColors.other;
+        var resultBadge = rDisp ? '<span class="mp-result"><span class="badge ' + rsc.badge + '">' + esc(rDisp) + '</span></span>' : '';
+        // External recipient: show the TO address; the destination MX host/IP is on hover.
+        parts.push('<div class="mp-node mp-ext"><div class="mp-icon" title="' + esc(sendLeg.relay || '') + '">' + GLOBE_SVG + '</div>' +
+          '<div class="mp-label">' + esc(last.to || primary.to || 'External recipient') + '</div>' +
+          '<div class="mp-sub">' + (dir === 'relayed' ? 'relayed externally' : 'handed off — delivery outside our control') + '</div>' + resultBadge + '</div>');
+      } else {
+        // Final endpoint — GATED. Only show a mailbox when a leg ACTUALLY delivered
+        // locally; never fabricate "delivered to mailbox".
+        var deliveredLocal = legs.filter(mpDeliversLocal).slice(-1)[0];
+        var finalDisp = (primary.disposition || primary.status || '').toLowerCase();
+        // A leg that relayed the message ONWARD to another mail server (the backend
+        // behind a content-filter gateway, often a public IP), as opposed to a local
+        // mailbox delivery — the inbound-to-backend case.
+        var onwardLeg = legs.filter(function(l) { return mpIsPublic(mpExtractIP(l.relay)) && !mpDeliversLocal(l); }).slice(-1)[0];
+        if (deliveredLocal) {
+          parts.push(mpConn(false, false));
+          parts.push(mpIconNode(MAILBOX_SVG, last.to || primary.to || 'Mailbox', 'delivered to mailbox', 'mp-mbox', deliveredLocal.relay));
+        } else if (legs.some(function(l) { return (l.filter_action || '') === 'noqueue-reject'; })) {
+          // NOQUEUE reject: refused at RCPT, never accepted or sent onward. The path
+          // STOPS at the server (its node already reads "rejected") — no external
+          // recipient node, since nothing was ever relayed there.
+        } else if (/reject|block|virus|spam|bounce|defer/.test(finalDisp)) {
+          // Not delivered (but the message WAS accepted, then blocked/bounced/etc):
+          // still show the intended recipient (To) where present, with the failure as
+          // the sub-label and a red marker.
+          parts.push(mpConn(false, false));
+          var stopTo = last.to || primary.to;
+          parts.push(mpIconNode(STOP_SVG, stopTo || finalDisp, stopTo ? ('not delivered — ' + finalDisp) : 'not delivered', 'mp-stop'));
+        } else if (onwardLeg) {
+          // Inbound scanned then relayed onward to the recipient's mail server. Show the
+          // recipient + the onward result instead of dead-ending at the gateway.
+          parts.push(mpConn(false, false));
+          var oDisp = onwardLeg.disposition || onwardLeg.status || 'sent';
+          var osc = statusColors[(oDisp || '').toLowerCase()] || statusColors.other;
+          var oBadge = '<span class="mp-result"><span class="badge ' + osc.badge + '">' + esc(oDisp) + '</span></span>';
+          parts.push('<div class="mp-node mp-mbox"><div class="mp-icon" title="' + esc(onwardLeg.relay || '') + '">' + MAILBOX_SVG + '</div>' +
+            '<div class="mp-label">' + esc(last.to || primary.to || 'Recipient') + '</div>' +
+            '<div class="mp-sub">delivered to mail server</div>' + oBadge + '</div>');
+        }
+        // else: received/queued with no recorded delivery → path simply ends at the
+        // last server (whose chip already reads "received"); no fabricated endpoint.
+      }
+
+      host.innerHTML =
+        '<div class="detail-col-header">' + ROUTE_SVG + ' Mail path <span class="mp-dir mp-dir-' + dir + '">' + dir + '</span>' +
+          ' <span class="text-secondary fw-normal ms-1">Select one or more servers to view the log timeline</span></div>' +
+        '<div class="mail-path">' + parts.join('') + '</div>';
+      host.classList.remove('d-none');
+    }
+
+    function renderDetail() {
+      var primary = detailState.cache[detailState.primary];
+      if (!primary) return;
+      var d = primary; // message-wide fields (subject, message-id) read from here
+      // Envelope/status fields use ALL legs (earliest→latest), independent of which
+      // servers are selected, so From/Client/To/Relay don't flip when toggling chips.
+      var allLegs = mpLegs();
+      var dir = (primary && primary.direction) || mpDirection(allLegs);
+      var originLeg = allLegs[0] || primary;                    // first hop (sender side)
+      var finalLeg = allLegs[allLegs.length - 1] || primary;    // last hop (final outcome)
+      var disposition = d.disposition || d.status || '';
+
+      // Header \u2014 just the queue id (the disposition lives in the Result block now).
       document.getElementById('detail-title').innerHTML =
-        '<div class="detail-title-row">' +
-          '<span class="detail-qid">' + esc(d.queue_id) + '</span>' +
-          '<span class="badge ' + sc.badge + '">' + esc(disposition) + '</span>' +
-        '</div>';
-      document.getElementById('detail-subtitle').textContent =
-        utcToLocal(d.timestamp) + (d.status_detail ? '  \u2014  ' + d.status_detail : '');
+        '<div class="detail-title-row"><span class="detail-qid">' + esc(d.queue_id) + '</span></div>';
+      document.getElementById('detail-subtitle').textContent = utcToLocal(d.timestamp);
+
+      // Status: a cascade of the message's events (one row per server, earliest to
+      // latest). The last row is the final result and carries the flag + "Result" tag
+      // and the NDR badge (when applicable).
+      var resultRow = document.getElementById('detail-result-row');
+      var rDisp = finalLeg.disposition || finalLeg.status || disposition;
+      var origins = detailState.origins;
+      var showNdr = d.ndr && ['spam', 'virus', 'blocked'].indexOf((rDisp || '').toLowerCase()) === -1;
+      if (origins.length) {
+        var rd = (rDisp || '').toLowerCase();
+        // A scanner/reject verdict (spam/blocked/…) is a result distinct from any server's
+        // action; delivered/sent ends at the To recipient. Both render as the flagged row.
+        var isVerdict = ['spam', 'blocked', 'virus', 'rejected', 'reject', 'bounced', 'deferred'].indexOf(rd) !== -1;
+        var rsc = statusColors[rd] || statusColors.other;
+        var ndrBadge = showNdr ? '<span class="badge badge-ndr">' + NDR_SVG + 'NDR</span>' : '';
+
+        // From endpoint (mirrors the path's start): external globe for inbound, user for a
+        // local/authenticated sender. Original envelope FROM (the inbound-entry leg, pre-SRS).
+        var senderAddr, senderIcon;
+        if (dir === 'inbound' || dir === 'relayed') {
+          var entry = allLegs.filter(function(l) { return mpIsPublic(mpExtractIP(l.client)) && !mpHasAuth(l); })[0] || allLegs[0];
+          senderAddr = entry.from || primary.from || mpHostOnly(entry.client) || 'external sender';
+          senderIcon = GLOBE_SVG;
+        } else {
+          senderAddr = allLegs[0].from || primary.from || mpHostOnly(allLegs[0].client) || 'sender';
+          senderIcon = USER_SVG;
+        }
+        var steps = '<div class="sc-step"><span class="sc-marker sc-icon">' + senderIcon + '</span>' +
+          '<span class="sc-body"><span class="sc-label">From</span><span class="sc-addr">' + esc(senderAddr) + '</span></span></div>';
+
+        // Server hops — each in its own columns so long status detail can't break layout.
+        steps += origins.map(function(o) {
+          var oLegs = (o.recs || []).map(function(g) { return detailState.cache[dkey(g.origin, g.qid)]; }).filter(Boolean)
+            .sort(function(a, b) { var x = a.timestamp || '', y = b.timestamp || ''; return x < y ? -1 : (x > y ? 1 : 0); });
+          var rl = mpServerRole(o, dir), lsc = statusColors[rl] || statusColors.other;
+          var txt = '';
+          for (var k = oLegs.length - 1; k >= 0; k--) { if (oLegs[k].status_detail) { txt = oLegs[k].status_detail; break; } }
+          // Single-node (standalone) view: no server identity — drop the chip and let the
+          // status badge + detail span the row, like the endpoint rows.
+          if (!hasOrigins) {
+            return '<div class="sc-step"><span class="sc-marker"></span>' +
+              '<span class="sc-body"><span class="badge ' + lsc.badge + '">' + esc(rl) + '</span>' +
+              (txt ? '<span class="sc-reason">' + esc(txt) + '</span>' : '') + '</span></div>';
+          }
+          return '<div class="sc-step"><span class="sc-marker"></span>' +
+            '<span class="sc-srv"><span class="srv-badge" style="--hue:' + hueFor(o.origin) + '"><span class="dot"></span>' + esc(o.origin) + '</span></span>' +
+            '<span class="badge sc-badge ' + lsc.badge + '">' + esc(rl) + '</span>' +
+            '<span class="sc-text">' + esc(txt) + '</span><span class="sc-ndr"></span></div>';
+        }).join('');
+
+        // Result endpoint (mirrors the path's end, flag marker). delivered/sent → the To
+        // recipient; a verdict → the verdict badge + reason.
+        var flagMk = '<span class="sc-marker sc-flag">' + FLAG_SVG + '</span>';
+        var toAddr = finalLeg.to || primary.to || d.to || '';
+        if (isVerdict) {
+          // Surface the real verdict (scanner action · score · rule) rather than the
+          // misleading "Saved/OK" delivery handoff a scanned-spam leg logs; keep the SMTP
+          // detail when it actually carries the reason (e.g. a "… BLOCKED …" / reject line).
+          var vbits = [];
+          if (d.filter_action) vbits.push(d.filter_action);
+          if (d.spam_score) vbits.push(d.spam_score);
+          if (d.filter_rule) vbits.push(d.filter_rule);
+          var sd = finalLeg.status_detail || '';
+          if (sd && !/\bsaved\b|\bok\b/i.test(sd)) vbits.push(sd);
+          var vtext = vbits.join(' · ') || sd;
+          steps += '<div class="sc-step sc-result">' + flagMk +
+            '<span class="sc-body"><span class="badge ' + rsc.badge + '">' + esc(rDisp) + '</span>' +
+            (vtext ? '<span class="sc-reason">' + esc(vtext) + '</span>' : '') + ndrBadge + '</span></div>';
+        } else {
+          steps += '<div class="sc-step sc-result">' + flagMk +
+            '<span class="sc-body">' +
+            (toAddr ? '<span class="sc-label">To</span><span class="sc-addr">' + esc(toAddr) + '</span>' : '') +
+            '<span class="badge ' + rsc.badge + '">' + esc(rDisp) + '</span>' + ndrBadge + '</span></div>';
+        }
+
+        resultRow.innerHTML = '<div class="detail-col-header">' + STATUS_SVG + ' Status</div>' +
+          '<div class="status-cascade">' + steps + '</div>';
+        resultRow.classList.remove('d-none');
+      } else {
+        resultRow.classList.add('d-none');
+        resultRow.innerHTML = '';
+      }
 
       // Hero: Message ID (orange N/A badge when absent)
       var midHtml = d.message_id
@@ -788,40 +1848,41 @@
         subjectRow.classList.add('d-none');
       }
 
-      // Two-column layout: Sender (left) | Recipient (right)
-      var senderHtml =
-        '<div class="detail-col-header">' +
-          '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" ' +
-          'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-          '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/>' +
-          '<path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>' +
-          'Sender' +
-        '</div>' +
-        field('From', d.from) +
-        field('Client', d.client) +
-        field('Size', d.size ? d.size + ' (' + (d.size_bytes || 0).toLocaleString() + ' bytes)' : '');
+      // Mail path — the directional journey, with the (still selectable) server
+      // chips as the hops. Supersedes the old plain "relayed servers" row.
+      document.getElementById('detail-related-row').classList.add('d-none');
+      renderMailPath();
 
+      // Envelope — stacked Sender over Recipient (full width). With multiple servers
+      // selected, Sender takes the external origin (earliest hop) and Recipient the
+      // final relay (latest hop), so the whole journey reads top to bottom.
+      var senderHtml =
+        '<div class="detail-col-header">' + MAIL_OUT_SVG + ' Sender</div>' +
+        field('From', originLeg.from || d.from) +
+        field('Client', originLeg.client) +
+        field('Subject', d.subject) +
+        field('Size', originLeg.size ? originLeg.size + ' (' + (originLeg.size_bytes || 0).toLocaleString() + ' bytes)' : '');
+
+      // Mark the recipient as delivered to a mailbox when any leg actually did so.
+      var toVal = finalLeg.to || d.to;
+      var mboxChip = allLegs.some(mpDeliversLocal) ? ' <span class="badge bg-success text-success-fg">delivered to mailbox</span>' : '';
+      var toField = toVal ? '<div class="detail-field"><div class="detail-label">To</div>' +
+        '<div class="detail-value">' + esc(toVal) + mboxChip + '</div></div>' : '';
       var recipientHtml =
-        '<div class="detail-col-header">' +
-          '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" ' +
-          'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-          '<path d="M22 13V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v12c0 1.1.9 2 2 2h8"/>' +
-          '<path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>' +
-          '<path d="m16 19 2 2 4-4"/></svg>' +
-          'Recipient' +
-        '</div>' +
-        field('To', d.to) +
-        field('Relay', d.relay) +
-        (d.delivery_queue_id ? field('Delivery queue ID', d.delivery_queue_id) : '') +
-        field('TLS', d.tls);
+        '<div class="detail-col-header">' + MAIL_IN_SVG + ' Recipient</div>' +
+        toField +
+        field('Relay', finalLeg.relay) +
+        (finalLeg.delivery_queue_id ? field('Delivery queue ID', finalLeg.delivery_queue_id) : '') +
+        field('TLS', finalLeg.tls);
 
       document.getElementById('detail-cols').innerHTML =
-        '<div>' + senderHtml + '</div><div>' + recipientHtml + '</div>';
+        '<div>' + senderHtml + '</div>' +
+        '<div class="envelope-arrow"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="5" y2="19"/><polyline points="19 12 12 19 5 12"/></svg></div>' +
+        '<div>' + recipientHtml + '</div>';
 
       // Scanner / rejection verdict — full width, below the Sender/Recipient boxes.
       var scannerRow = document.getElementById('detail-scanner-row');
       if (d.filter_action) {
-        var rawStatus = (d.status + (d.status_detail ? ' ' + d.status_detail : '')).trim();
         var verdictHdr = d.filter ? 'Scanner' : 'Rejection';
         var cell = function(label, value) {
           return '<div class="col-6 col-md-3">' + field(label, value) + '</div>';
@@ -833,7 +1894,6 @@
             cell('Spam score', d.spam_score) +
             cell('Rule', d.filter_rule) +
             (d.filter ? cell('Filter', d.filter + (d.filter_id ? ' (' + d.filter_id + ')' : '')) : '') +
-            '<div class="col-12">' + field('Postfix status', rawStatus) + '</div>' +
           '</div>';
         scannerRow.classList.remove('d-none');
       } else {
@@ -841,17 +1901,42 @@
         scannerRow.innerHTML = '';
       }
 
-      // Log lines
-      var lines = d.lines || [];
-      document.getElementById('detail-line-count').textContent = '(' + lines.length + ')';
-      var linesHtml = '';
-      lines.forEach(function(l) {
-        linesHtml += '<li>' + esc(l.raw) + '</li>';
-      });
-      document.getElementById('detail-lines').innerHTML =
-        linesHtml || '<li class="text-secondary" style="font-family:inherit">No log lines available</li>';
+      renderTimeline();
+    }
 
-      getDetailModal().show();
+    // renderTimeline draws the per-message log timeline for the selected servers:
+    // a clean, time-ascending parsed view by default, or the raw lines when toggled.
+    function renderTimeline() {
+      var tl = document.getElementById('detail-timeline');
+      var sel = selectedDetails();
+      // No server selected → hide the whole timeline block (header, toggle, lines).
+      if (!sel.length) { if (tl) tl.classList.add('d-none'); return; }
+      if (tl) tl.classList.remove('d-none');
+      var showRaw = document.getElementById('detail-raw-toggle').checked;
+      var showServer = detailState.origins.length > 1; // keep the server column whenever the group spans >1 server
+      var rows = [];
+      sel.forEach(function(dd) {
+        (dd.lines || []).forEach(function(l) { rows.push({ ts: l.timestamp || '', server: dd.origin || '', raw: l.raw }); });
+      });
+      rows.sort(function(a, b) { if (!a.ts && !b.ts) return 0; if (!a.ts) return 1; if (!b.ts) return -1; return a.ts < b.ts ? -1 : (a.ts > b.ts ? 1 : 0); });
+      document.getElementById('detail-line-count').textContent = '(' + rows.length + ')';
+      var empty = '<li class="text-secondary" style="font-family:inherit">No log lines available</li>';
+      var html;
+      if (showRaw) {
+        html = rows.map(function(r) {
+          return '<li>' + (showServer ? serverBadge(r.server) + ' ' : '') + esc(r.raw) + '</li>';
+        }).join('');
+      } else {
+        html = rows.map(function(r) {
+          var p = parseLogLine(r.raw);
+          return '<li class="clean-line">' +
+            '<span class="cl-time text-muted">' + esc(utcToLocal(r.ts)) + '</span>' +
+            (showServer ? '<span class="cl-server">' + serverBadge(r.server) + '</span>' : '') +
+            '<span class="cl-stage"><span class="badge bg-secondary-lt">' + esc(p.stage) + '</span></span>' +
+            '<span class="cl-text">' + esc(p.text) + '</span></li>';
+        }).join('');
+      }
+      document.getElementById('detail-lines').innerHTML = html || empty;
     }
 
     // ── Charts ───────────────────────────────────────────────────
@@ -888,7 +1973,98 @@
     }
 
     // ── Stats ────────────────────────────────────────────────────
-    function loadStats() {
+    // Shared filter query so the graphs (/api/stats) reflect the same filters as the table.
+    function filterQuery() {
+      return $.param({
+        search:    document.getElementById('global-search').value || '',
+        f_from:    $('#f-from').val(),
+        f_to:      $('#f-to').val(),
+        f_subject: $('#f-subject').val(),
+        f_client:  $('#f-client').val(),
+        f_relay:   $('#f-relay').val(),
+        f_status:  $('#f-status').val(),
+        f_qid:     $('#f-qid').val(),
+        f_tls:     $('#f-tls').val(),
+        f_ndr:     $('#f-ndr').val(),
+        f_server:  serverFilterValue(),
+        f_direction: $('#f-direction').val()
+      });
+    }
+
+    // ── Server multi-select (table scope) ────────────────────────
+    // Toggle which servers' mail is listed in the table. Correlation in the modal is
+    // by Message-ID and is unaffected; this only narrows the rows (and filtered stats).
+    var serverFilter = { all: [], selected: null }; // selected null = not yet loaded
+    function serverFilterValue() {
+      var sf = serverFilter;
+      if (!sf.selected || !sf.all.length || sf.selected.length === sf.all.length) return ''; // all = no filter
+      return sf.selected.join(',');
+    }
+    function populateServerFilter() {
+      fetch('/api/suggest?field=origin').then(function(r) { return r.json(); }).then(function(items) {
+        serverFilter.all = (items || []).filter(Boolean).sort();
+        if (serverFilter.selected === null) serverFilter.selected = serverFilter.all.slice(); // default: all on
+        serverFilter.selected = serverFilter.selected.filter(function(s) { return serverFilter.all.indexOf(s) !== -1; });
+        if (!serverFilter.selected.length) serverFilter.selected = serverFilter.all.slice();
+        renderServerFilter();
+        updateHeaderServers();
+      }).catch(function() {});
+    }
+    function renderServerFilter() {
+      var menu = document.getElementById('server-filter-menu');
+      if (!menu) return;
+      var chips = serverFilter.all.map(function(name) {
+        var on = serverFilter.selected.indexOf(name) !== -1;
+        return '<button type="button" class="srv-chip' + (on ? ' on' : '') + '" style="--hue:' + hueFor(name) + '" data-server="' + esc(name) + '">' +
+               '<span class="dot"></span>' + esc(name) + '</button>';
+      }).join('');
+      menu.innerHTML =
+        '<div class="d-flex justify-content-between align-items-center mb-2 px-1">' +
+          '<span class="small text-secondary">Show servers</span>' +
+          '<button type="button" class="btn btn-link btn-sm p-0 text-muted" id="server-filter-all">All</button>' +
+        '</div><div class="srv-chips">' + chips + '</div>';
+      var badge = document.getElementById('server-filter-count');
+      var n = serverFilter.selected.length, total = serverFilter.all.length;
+      if (n > 0 && n < total) { badge.textContent = n; badge.classList.remove('d-none'); }
+      else { badge.classList.add('d-none'); }
+    }
+    function applyServerFilter() {
+      renderServerFilter();
+      if (dataTable) dataTable.ajax.reload();
+      loadStats();
+    }
+    // Toggle a server chip (keep at least one selected); "All" re-selects everything.
+    $(document).on('click', '#server-filter-menu .srv-chip', function() {
+      var name = String($(this).data('server'));
+      var i = serverFilter.selected.indexOf(name);
+      if (i === -1) serverFilter.selected.push(name);
+      else if (serverFilter.selected.length > 1) serverFilter.selected.splice(i, 1);
+      applyServerFilter();
+    });
+    $(document).on('click', '#server-filter-all', function() {
+      serverFilter.selected = serverFilter.all.slice();
+      applyServerFilter();
+    });
+
+    // Live autocomplete: pull distinct from/to/subject/client/relay values from the
+    // data into datalists. Throttled, and refreshed on focus + live refresh so new
+    // values appearing in the logs become suggestions.
+    var suggestLast = 0;
+    function populateSuggestions() {
+      var now = Date.now();
+      if (now - suggestLast < 10000) return;
+      suggestLast = now;
+      ['from', 'to', 'subject', 'client', 'relay'].forEach(function(f) {
+        fetch('/api/suggest?field=' + f).then(function(r) { return r.json(); }).then(function(items) {
+          var dl = document.getElementById('dl-' + f);
+          if (dl) dl.innerHTML = (items || []).map(function(v) { return '<option value="' + esc(v) + '">'; }).join('');
+        }).catch(function() {});
+      });
+    }
+
+    // Top stat cards are GLOBAL totals — they never reflect the active filters (so
+    // selecting one status doesn't zero out the others). Fetched unfiltered.
+    function loadTotals() {
       fetch('/api/stats').then(function(r) { return r.json(); }).then(function(s) {
         document.getElementById('stat-total').textContent = s.total.toLocaleString();
         document.getElementById('stat-sent').textContent = s.sent.toLocaleString();
@@ -897,19 +2073,62 @@
         document.getElementById('stat-rejected').textContent = s.rejected.toLocaleString();
         document.getElementById('stat-bounced').textContent = s.bounced.toLocaleString();
         document.getElementById('stat-deferred').textContent = s.deferred.toLocaleString();
+        document.getElementById('stat-ndr').textContent = (s.ndr || 0).toLocaleString();
         document.getElementById('record-count-nav').textContent = s.total.toLocaleString() + ' records';
+        // Direction cards (global totals too).
+        document.getElementById('stat-dir-all').textContent = s.total.toLocaleString();
+        document.getElementById('stat-inbound').textContent = (s.inbound || 0).toLocaleString();
+        document.getElementById('stat-outbound').textContent = (s.outbound || 0).toLocaleString();
+        document.getElementById('stat-internal').textContent = (s.internal || 0).toLocaleString();
+        document.getElementById('stat-relayed').textContent = (s.relayed || 0).toLocaleString();
+        updateCoverage(s.earliest, s.retention_days);
+        updateCardActives();
+      });
+    }
 
+    // Header line: how much history is loaded, and the configured retention window.
+    function updateCoverage(earliest, retentionDays) {
+      var el = document.getElementById('coverage-nav');
+      if (!el) return;
+      var bits = [];
+      if (earliest) {
+        var days = Math.max(1, Math.ceil((Date.now() - new Date(earliest).getTime()) / 86400000));
+        bits.push('Showing ' + days + ' day' + (days === 1 ? '' : 's') + ' of email');
+      }
+      bits.push('Retention: ' + (retentionDays > 0 ? retentionDays + ' days' : 'unlimited'));
+      el.textContent = bits.join(' · ');
+    }
+
+    // Charts and top-N lists DO reflect the active filters.
+    function loadStats() {
+      fetch('/api/stats?' + filterQuery()).then(function(r) { return r.json(); }).then(function(s) {
         statusChart.data.datasets[0].data = [s.sent, s.spam || 0, s.blocked || 0, s.rejected, s.bounced, s.deferred, s.other];
         statusChart.update();
 
+        // Always update (clears to empty when a filter yields no rows, instead of
+        // leaving the previous curve up). Adaptive buckets: over a long span, hourly
+        // points make the x-axis show arbitrary hours — roll them up to days with clean
+        // date labels. Keep hourly (with the date) only for short spans.
+        var labels = [], data = [];
         if (s.hourly && s.hourly.length) {
-          timelineChart.data.labels = s.hourly.map(function(h) {
-            var parts = h.hour.split(' ');
-            return parts.length > 1 ? parts[0].substring(5) + ' ' + parts[1] + 'h' : h.hour;
-          });
-          timelineChart.data.datasets[0].data = s.hourly.map(function(h) { return h.count; });
-          timelineChart.update();
+          var rows = s.hourly;
+          var first = new Date(rows[0].hour.replace(' ', 'T') + ':00');
+          var lastH = new Date(rows[rows.length - 1].hour.replace(' ', 'T') + ':00');
+          var spanDays = (lastH - first) / 86400000;
+          if (spanDays > 3) {
+            var byDay = {};
+            rows.forEach(function(h) { var d = h.hour.split(' ')[0]; byDay[d] = (byDay[d] || 0) + h.count; });
+            var days = Object.keys(byDay).sort();
+            labels = days.map(function(d) { return new Date(d + 'T00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); });
+            data = days.map(function(d) { return byDay[d]; });
+          } else {
+            labels = rows.map(function(h) { var p = h.hour.split(' '); return p[0].substring(5) + ' ' + p[1] + 'h'; });
+            data = rows.map(function(h) { return h.count; });
+          }
         }
+        timelineChart.data.labels = labels;
+        timelineChart.data.datasets[0].data = data;
+        timelineChart.update();
 
         var sendersHtml = '';
         (s.top_senders || []).forEach(function(item) {
@@ -927,7 +2146,55 @@
 
     function refreshAll() {
       if (dataTable) dataTable.ajax.reload(null, false);
+      loadTotals();
       loadStats();
+      populateSuggestions();
+      if (hasOrigins) populateServerFilter(); // pick up newly-seen servers
+    }
+
+    // Multi-server visibility: a chip per forwarding server in the header (distributed).
+    function updateHeaderServers() {
+      var el = document.getElementById('header-servers');
+      if (!el) return;
+      if (!hasOrigins || !serverFilter.all || serverFilter.all.length < 2) { el.classList.add('d-none'); el.innerHTML = ''; return; }
+      el.classList.remove('d-none');
+      el.innerHTML = serverFilter.all.map(function(n) {
+        return '<span class="srv-chip" style="--hue:' + hueFor(n) + ';padding:.2rem .5rem;font-size:.72rem"><span class="dot"></span>' + esc(n) + '</span>';
+      }).join('');
+    }
+
+    // ── Servers / local Postfix settings ─────────────────────────
+    function openServers() {
+      var body = document.getElementById('servers-body');
+      body.innerHTML = '<div class="text-secondary">Loading…</div>';
+      var BS = window.bootstrap || (tabler && tabler.Modal ? tabler : null);
+      if (BS && BS.Modal) BS.Modal.getOrCreateInstance(document.getElementById('servers-modal')).show();
+      fetch('/api/serverconf').then(function(r) { return r.json(); }).then(function(s) {
+        var servers = (s && s.servers) || [];
+        if (!s || !s.configured || !servers.length) {
+          body.innerHTML = '<div class="empty"><p class="empty-title">No Postfix config loaded</p>' +
+            '<p class="empty-subtitle text-secondary">Mount a read-only <code>/etc/postfix</code> and set <code>PLV_POSTFIX_CONF</code> to that path. ' +
+            'PLV then derives the two settings it uses for mail-direction — <strong>mynetworks</strong> (trusted networks) and the <strong>local/hosted domains</strong> — and updates them live when the config changes. ' +
+            'Without it, direction falls back to the IP/auth heuristic.</p></div>';
+          return;
+        }
+        body.innerHTML = servers.map(renderServerConf).join('');
+      }).catch(function() { body.innerHTML = '<div class="text-danger">Failed to load server config.</div>'; });
+    }
+    function renderServerConf(sv) {
+      function chips(arr, cls) {
+        return arr && arr.length
+          ? arr.map(function(v) { return '<span class="badge ' + cls + ' me-1 mb-1">' + esc(v) + '</span>'; }).join('')
+          : '<span class="text-secondary">none</span>';
+      }
+      var doms = sv.local_domains || [], nets = sv.networks || [];
+      return '<div class="mb-4">' +
+        '<div class="mb-2"><span class="srv-chip on" style="--hue:' + hueFor(sv.name) + '"><span class="dot"></span><strong>' + esc(sv.name) + '</strong></span></div>' +
+        '<div class="mb-3"><div class="text-secondary small text-uppercase fw-bold mb-1">Local / hosted domains (' + doms.length + ')</div>' +
+          '<div class="text-secondary small mb-1">A message <em>from</em> these is outbound; <em>to</em> these is inbound.</div>' + chips(doms, 'bg-blue-lt text-blue') + '</div>' +
+        '<div><div class="text-secondary small text-uppercase fw-bold mb-1">Trusted networks — mynetworks (' + nets.length + ')</div>' +
+          '<div class="text-secondary small mb-1">A client in these is a trusted source (e.g. your own backend), not internet reception.</div>' + chips(nets, 'bg-secondary-lt') + '</div>' +
+      '</div>';
     }
 
     // ── Boot ─────────────────────────────────────────────────────
@@ -935,10 +2202,20 @@
       fetch('/api/status').then(function(r) { return r.json(); }).then(function(s) {
         document.getElementById('loading-detail').textContent = s.status + ' (' + s.records.toLocaleString() + ' records)';
         if (s.ready) {
+          hasOrigins = !!s.has_origins;
+          if (hasOrigins) {
+            document.getElementById('group-toggle-wrap').classList.remove('d-none');
+            document.getElementById('group-toggle').checked = (loadSetting('group-relayed', 'true') === 'true');
+            document.getElementById('server-filter-wrap').classList.remove('d-none');
+            populateServerFilter();
+          }
           document.getElementById('loading').classList.add('hidden');
           initTable();
           initCharts();
+          loadTotals();
           loadStats();
+          renderFilterSummary();
+          populateSuggestions();
           setInterval(function() {
             if (document.getElementById('auto-refresh').checked) refreshAll();
           }, 30000);
@@ -958,6 +2235,10 @@
       document.getElementById('auto-refresh').addEventListener('change', function() {
         saveSetting('auto-refresh', this.checked);
       });
+      document.getElementById('detail-raw-toggle').addEventListener('change', renderTimeline);
+      rowTipsOn = loadSetting('row-tips', 'true') === 'true';
+      document.getElementById('tips-btn').classList.toggle('active', rowTipsOn);
+      $('#detail-modal').on('hidden.bs.modal', function() { clearInterval(detailPollTimer); detailPollTimer = null; });
 
       checkReady();
     });

@@ -2,8 +2,48 @@ package main
 
 import (
 	"strings"
+	"sync"
 	"testing"
 )
+
+// captureSink records everything a forwarder would ship.
+type captureSink struct {
+	mu   sync.Mutex
+	recs []Record
+}
+
+func (c *captureSink) Enqueue(r []Record) {
+	c.mu.Lock()
+	c.recs = append(c.recs, r...)
+	c.mu.Unlock()
+}
+
+func (c *captureSink) has(qid string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, r := range c.recs {
+		if r.QueueID == qid {
+			return true
+		}
+	}
+	return false
+}
+
+// TestForwarderSinkReceivesNewRecords guards the forwarder path: a brand-new
+// message (the common case — first time a queue id is seen) must be handed to the
+// sink. Regression test for the new-record branch only enqueuing when a DB was set.
+func TestForwarderSinkReceivesNewRecords(t *testing.T) {
+	store := NewStore(nil) // no DB, like a forwarder
+	sink := &captureSink{}
+	store.SetSink(sink)
+	store.AddRecords(parseLines([]string{
+		`2026-01-02T01:51:46.000000+00:00 mailhost postfix/smtp[1]: F1F1F1F101: to=<r@example.net>, relay=mx.example.net[203.0.113.40]:25, dsn=2.0.0, status=sent (250 ok)`,
+		`2026-01-02T01:51:46.400000+00:00 mailhost postfix/qmgr[1]: F1F1F1F101: removed`,
+	}))
+	if !sink.has("F1F1F1F101") {
+		t.Fatal("forwarder sink never received a brand-new record (new-record branch must enqueue when a sink is set)")
+	}
+}
 
 // All sample log lines below use synthetic data only: example.com/.net/.org
 // addresses, RFC 5737 documentation IPs (192.0.2.0/24, 198.51.100.0/24,
@@ -178,7 +218,7 @@ func TestDeliveryLegMerge(t *testing.T) {
 	store := NewStore(nil)
 	store.AddRecords(parseLines(lines))
 
-	st := store.Stats()
+	st := store.Stats(SearchParams{})
 	if st.Total != 1 {
 		t.Fatalf("Stats.Total = %d, want 1 (legs should merge)", st.Total)
 	}
@@ -186,7 +226,7 @@ func TestDeliveryLegMerge(t *testing.T) {
 		t.Errorf("Stats.Sent = %d, want 1", st.Sent)
 	}
 
-	d := store.GetDetail("A1A1A1A101")
+	d := store.GetDetail("", "A1A1A1A101")
 	if d == nil {
 		t.Fatal("no merged record for inbound id A1A1A1A101")
 	}
@@ -210,7 +250,7 @@ func TestDeliveryLegMerge(t *testing.T) {
 	}
 
 	// The outbound queue id resolves to the same merged item.
-	if d2 := store.GetDetail("B1B1B1B1B1"); d2 == nil || d2.QueueID != "A1A1A1A101" {
+	if d2 := store.GetDetail("", "B1B1B1B1B1"); d2 == nil || d2.QueueID != "A1A1A1A101" {
 		t.Fatalf("outbound id did not resolve to the merged primary: %+v", d2)
 	}
 
@@ -246,10 +286,10 @@ func TestRspamdCorrelation(t *testing.T) {
 	}
 
 	// Still exactly one item (enriched, not duplicated).
-	if st := store.Stats(); st.Total != 1 {
+	if st := store.Stats(SearchParams{}); st.Total != 1 {
 		t.Fatalf("Stats.Total = %d, want 1 (rspamd must not create rows)", st.Total)
 	}
-	d := store.GetDetail("D1D1D1D101")
+	d := store.GetDetail("", "D1D1D1D101")
 	if d == nil {
 		t.Fatal("no record for D1D1D1D101")
 	}
@@ -268,7 +308,8 @@ func TestRspamdCorrelation(t *testing.T) {
 }
 
 // TestRspamdPendingThenRecord: a verdict arriving before its mail record (live mode)
-// is held and applied when the record is added.
+// is held and applied when the record is added. "add header" tags the message but it is
+// still DELIVERED, so the disposition stays "sent" — the score/action ride along.
 func TestRspamdPendingThenRecord(t *testing.T) {
 	store := NewStore(nil)
 	line := `2026-01-02 02:00:00 #1(normal) <def456>; task; rspamd_task_write_log: id: <msg030@example.org>, qid: <E1E1E1E101>, ip: 192.0.2.60, from: <spammer@example.org>, (default: T (add header): [9.50/15.00] [BAYES_SPAM(5.0){}]), len: 10, time: 1ms, rcpts: <recipient@example.net>`
@@ -282,12 +323,41 @@ func TestRspamdPendingThenRecord(t *testing.T) {
 		`2026-01-02T12:00:01.0+00:00 mailhost postfix/smtp[1]: E1E1E1E101: to=<recipient@example.net>, relay=mx.example.net[203.0.113.30]:25, dsn=2.0.0, status=sent (250 ok)`,
 		`2026-01-02T12:00:01.0+00:00 mailhost postfix/qmgr[1]: E1E1E1E101: removed`,
 	}))
-	d := store.GetDetail("E1E1E1E101")
+	d := store.GetDetail("", "E1E1E1E101")
 	if d == nil || d.FilterAction != "add header" {
 		t.Fatalf("pending verdict not applied on record add: %+v", d)
 	}
-	if d.Disposition != "spam" {
-		t.Errorf("Disposition = %q, want spam (add header)", d.Disposition)
+	if d.Disposition != "sent" {
+		t.Errorf("Disposition = %q, want sent (add header tags but the mail is still delivered)", d.Disposition)
+	}
+	if d.SpamScore != "9.50" {
+		t.Errorf("SpamScore = %q, want 9.50 (score rides along on the delivered record)", d.SpamScore)
+	}
+}
+
+// TestOriginIdentity: in distributed mode two servers can emit the same Postfix
+// queue id. Records must be keyed by (origin, queue id) so they don't collide, and
+// each must be independently retrievable. Standalone (empty origin) is unaffected.
+func TestOriginIdentity(t *testing.T) {
+	store := NewStore(nil)
+	store.AddRecords([]Record{
+		{Origin: "node-a", QueueID: "ABCDEF0123", Status: "sent", Disposition: "sent"},
+		{Origin: "node-b", QueueID: "ABCDEF0123", Status: "deferred", Disposition: "deferred"},
+	})
+	if st := store.Stats(SearchParams{}); st.Total != 2 {
+		t.Fatalf("Stats.Total = %d, want 2 (same qid, different origin must not collide)", st.Total)
+	}
+	if !store.HasOrigins() {
+		t.Error("HasOrigins() = false, want true once a record carries an origin")
+	}
+	if d := store.GetDetail("node-a", "ABCDEF0123"); d == nil || d.Origin != "node-a" || d.Disposition != "sent" {
+		t.Fatalf("node-a detail wrong: %+v", d)
+	}
+	if d := store.GetDetail("node-b", "ABCDEF0123"); d == nil || d.Origin != "node-b" || d.Disposition != "deferred" {
+		t.Fatalf("node-b detail wrong: %+v", d)
+	}
+	if store.GetDetail("", "ABCDEF0123") != nil {
+		t.Error("empty-origin lookup must not resolve an origin-scoped record")
 	}
 }
 
@@ -307,5 +377,44 @@ func TestNormalSentUnaffected(t *testing.T) {
 	}
 	if r.FilterAction != "" {
 		t.Errorf("unexpected FilterAction = %q", r.FilterAction)
+	}
+}
+
+// TestSubjectLocalSubmission: header_checks logs "Subject: … from local;" for locally
+// submitted mail (no host[ip]); the subject must still be extracted.
+func TestSubjectLocalSubmission(t *testing.T) {
+	lines := []string{
+		`2026-01-02T05:30:36.912883+10:00 host postfix/pickup[1]: D0D0D0D001: uid=0 from=<support@example.com>`,
+		`2026-01-02T05:30:36.923953+10:00 host postfix/cleanup[2]: D0D0D0D001: warning: header Subject: [DOWNTIME] reboot at 2:30AM tomorrow from local; from=<support@example.com>`,
+		`2026-01-02T05:30:37.643252+10:00 host postfix/qmgr[3]: D0D0D0D001: from=<support@example.com>, size=9477, nrcpt=1 (queue active)`,
+		`2026-01-02T05:30:39.293023+10:00 host postfix/local[4]: D0D0D0D001: to=<support@example.com>, relay=local, dsn=2.0.0, status=sent (delivered to command: /usr/bin/x)`,
+		`2026-01-02T05:30:44.311212+10:00 host postfix/qmgr[3]: D0D0D0D001: removed`,
+	}
+	recs := parseLines(lines)
+	r := recordByQID(recs, "D0D0D0D001")
+	if r == nil {
+		t.Fatal("no record for D0D0D0D001")
+	}
+	if r.Subject != "[DOWNTIME] reboot at 2:30AM tomorrow" {
+		t.Errorf("Subject = %q, want %q", r.Subject, "[DOWNTIME] reboot at 2:30AM tomorrow")
+	}
+}
+
+// TestFilterBlockRule: a pmg-smtp-filter "block mail to … (rule: …)" line must capture
+// the rule into the verdict (it previously only set the action/disposition).
+func TestFilterBlockRule(t *testing.T) {
+	line := `2026-01-02T20:28:54.0+10:00 gw pmg-smtp-filter[99]: ABCDEF01234567: block mail to <dl@example.com> (rule: Block stupid domains)`
+	fid, v, ok := parseFilterLine(line)
+	if !ok {
+		t.Fatal("parseFilterLine ok=false")
+	}
+	if fid != "ABCDEF01234567" {
+		t.Errorf("fid = %q, want ABCDEF01234567", fid)
+	}
+	if v.action != "block" || v.disposition != "blocked" {
+		t.Errorf("action=%q disposition=%q, want block/blocked", v.action, v.disposition)
+	}
+	if v.rule != "Block stupid domains" {
+		t.Errorf("rule = %q, want 'Block stupid domains'", v.rule)
 	}
 }

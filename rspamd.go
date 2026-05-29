@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -54,11 +55,13 @@ func parseRspamdLine(line string) (qid string, v rspamdVerdict, ok bool) {
 	return qm[1], v, true
 }
 
-// rspamdDisposition maps an rspamd action onto an effective disposition. "no action"
-// leaves the postfix-derived disposition unchanged.
+// rspamdDisposition maps an rspamd action onto an effective disposition. Only "reject"
+// actually stops the mail; "add header" and "rewrite subject" merely tag a message that
+// is then DELIVERED, so they leave the postfix-derived disposition (e.g. delivered)
+// unchanged — the spam score still rides along on the record. "no action" is a no-op too.
 func rspamdDisposition(action string) string {
 	switch action {
-	case "reject", "add header", "rewrite subject":
+	case "reject":
 		return "spam"
 	case "soft reject", "greylist":
 		return "deferred"
@@ -91,11 +94,22 @@ func enrichRecordWithRspamd(rec *Record, v rspamdVerdict) {
 }
 
 func extractRspamdTime(line string) time.Time {
+	return extractRspamdTimeIn(line, time.Local)
+}
+
+// extractRspamdTimeIn parses rspamd's zone-less wall-clock in the given location. rspamd
+// logs no offset (unlike Postfix's RFC3339), so to line a verdict up with its mail
+// record's timeline we interpret it in that record's zone — passing time.Local only as a
+// fallback when the record's offset isn't known.
+func extractRspamdTimeIn(line string, loc *time.Location) time.Time {
 	m := reRspamdTime.FindStringSubmatch(line)
 	if m == nil {
 		return time.Time{}
 	}
-	t, err := time.Parse("2006-01-02 15:04:05", m[1])
+	if loc == nil {
+		loc = time.Local
+	}
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", m[1], loc)
 	if err != nil {
 		return time.Time{}
 	}
@@ -196,12 +210,17 @@ func parseRspamdFile(path string, store *Store) int {
 type RspamdWatcher struct {
 	path   string
 	store  *Store
-	offset int64
+	offset atomic.Int64
 }
 
 func NewRspamdWatcher(path string, store *Store, offset int64) *RspamdWatcher {
-	return &RspamdWatcher{path: path, store: store, offset: offset}
+	w := &RspamdWatcher{path: path, store: store}
+	w.offset.Store(offset)
+	return w
 }
+
+// Offset returns the current tail position of the active rspamd.log.
+func (w *RspamdWatcher) Offset() int64 { return w.offset.Load() }
 
 func (w *RspamdWatcher) Run(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
@@ -209,7 +228,7 @@ func (w *RspamdWatcher) Run(ctx context.Context) {
 	pruneTicker := time.NewTicker(5 * time.Minute)
 	defer pruneTicker.Stop()
 
-	log.Printf("rspamd watcher: tailing %s from offset %d", w.path, w.offset)
+	log.Printf("rspamd watcher: tailing %s from offset %d", w.path, w.offset.Load())
 	for {
 		select {
 		case <-ctx.Done():
@@ -227,10 +246,12 @@ func (w *RspamdWatcher) tick() {
 	if err != nil {
 		return
 	}
-	if info.Size() < w.offset {
-		w.offset = 0 // rotated
+	off := w.offset.Load()
+	if info.Size() < off {
+		off = 0 // rotated
+		w.offset.Store(0)
 	}
-	if info.Size() == w.offset {
+	if info.Size() == off {
 		return
 	}
 	f, err := os.Open(w.path)
@@ -238,7 +259,7 @@ func (w *RspamdWatcher) tick() {
 		return
 	}
 	defer f.Close()
-	if _, err := f.Seek(w.offset, 0); err != nil {
+	if _, err := f.Seek(off, 0); err != nil {
 		return
 	}
 	reader := bufio.NewReader(f)
@@ -247,7 +268,8 @@ func (w *RspamdWatcher) tick() {
 		if err != nil {
 			break
 		}
-		w.offset += int64(len(line))
+		off += int64(len(line))
+		w.offset.Store(off)
 		if qid, v, ok := parseRspamdLine(strings.TrimRight(line, "\n\r")); ok {
 			w.store.ApplyRspamdVerdict(qid, v)
 		}

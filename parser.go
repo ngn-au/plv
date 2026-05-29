@@ -15,19 +15,23 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 var (
 	queueIDRe = regexp.MustCompile(`postfix/[^\]]+\]:\s*([A-Fa-f0-9]{10,12}):`)
 
-	reTo        = regexp.MustCompile(`to=<([^>]*)>,.*orig_to=<([^>]*)>|to=<([^>]*)>`)
-	reFrom      = regexp.MustCompile(`from=<([a-zA-Z0-9\-+_.=]+@[a-zA-Z0-9\-+_.]+)>`)
-	reSubject   = regexp.MustCompile(`header\sSubject:\s(.*?)\sfrom\s\S+\[`)
+	reTo   = regexp.MustCompile(`to=<([^>]*)>,.*orig_to=<([^>]*)>|to=<([^>]*)>`)
+	reFrom = regexp.MustCompile(`from=<([a-zA-Z0-9\-+_.=]+@[a-zA-Z0-9\-+_.]+)>`)
+	// header_checks WARN logs "Subject: <subj> from <origin>;" where origin is either
+	// host[ip] (remote) or bare "local" (locally submitted) — match both terminators.
+	reSubject   = regexp.MustCompile(`header\sSubject:\s(.*?)\sfrom\s[^\s\[;]+[;\[]`)
 	reSize      = regexp.MustCompile(`size=([0-9]+),`)
 	reMessageID = regexp.MustCompile(`message-id=<([^>]*)>`)
 	reStatus    = regexp.MustCompile(`status=([a-zA-Z0-9\-_.]+)\s(\([^)]*\))|(reject):\s[^:]*:\s([0-9][^;]*);\s`)
 	reRelay     = regexp.MustCompile(`(?:relay|connect to).([a-zA-Z0-9\-._]+)\[([^\]]*)\]:([0-9]+)`)
-	reClient    = regexp.MustCompile(`client.([a-zA-Z0-9\-._]+)?\[([^\]]*)\]`)
+	reClient    = regexp.MustCompile(`client=([a-zA-Z0-9\-._]+)?\[([^\]]*)\]`)
 	// After a content filter re-injects a message, postfix logs the real external
 	// origin as orig_client= alongside client=localhost.
 	reOrigClient = regexp.MustCompile(`orig_client=([a-zA-Z0-9\-._]+)?\[([^\]]*)\]`)
@@ -46,7 +50,7 @@ var (
 	// (Level 3)", so capture greedily up to the final ")" on the line.
 	reQuarantine = regexp.MustCompile(`to ([a-z]+) quarantine - ([A-Fa-f0-9]+) \(rule: (.+)\)`)
 	reAccept     = regexp.MustCompile(`accept mail to <[^>]*> \(([A-Fa-f0-9]+)\) \(rule: (.+)\)`)
-	reBlock      = regexp.MustCompile(`block mail to `)
+	reBlock      = regexp.MustCompile(`block mail to <[^>]*>(?: \(rule: (.+)\))?`)
 	// reNoQueue parses SMTP-time rejections that never get a queue id
 	// (postscreen/smtpd "NOQUEUE: reject"). host is optional (postscreen logs
 	// "from [ip]:port" with no hostname).
@@ -96,9 +100,10 @@ func parseFilterLine(line string) (string, filterVerdict, bool) {
 		v.onwardQID = am[1]
 		v.rule = am[2]
 		v.disposition = "sent"
-	} else if reBlock.MatchString(line) {
+	} else if bm := reBlock.FindStringSubmatch(line); bm != nil {
 		v.action = "block"
 		v.disposition = "blocked"
+		v.rule = bm[1] // the "(rule: …)" clause, when present
 	}
 
 	return fid, v, true
@@ -179,6 +184,9 @@ func deriveDisposition(rec *Record) string {
 	detail := strings.ToLower(rec.StatusDetail)
 	switch {
 	case strings.HasPrefix(st, "sent"):
+		if deliversLocal(rec) { // lmtp/dovecot/local/virtual or "… Saved" → mailbox
+			return "delivered"
+		}
 		return "sent"
 	case strings.HasPrefix(st, "reject"):
 		if strings.Contains(detail, "spamassassin") || strings.Contains(detail, "spam") {
@@ -193,7 +201,14 @@ func deriveDisposition(rec *Record) string {
 	case strings.HasPrefix(st, "deferred"):
 		return "deferred"
 	case st == "":
-		return "received"
+		// "received" requires the qmgr "… size=N (queue active)" signal that the
+		// message was actually accepted into the queue. A connection that got a
+		// queue id but no size (aborted/probe session, or log cut at rotation) is
+		// not a real reception.
+		if rec.Size > 0 {
+			return "received"
+		}
+		return "incomplete"
 	default:
 		return st
 	}
@@ -254,6 +269,21 @@ func extractTimestamp(text string) time.Time {
 	return t.UTC()
 }
 
+// logLineLocation returns the time zone of a line's RFC3339 timestamp (e.g. the +10:00
+// offset), preserving it rather than normalising to UTC like extractTimestamp. Used to
+// interpret zone-less rspamd lines in the same offset the Postfix lines were written in.
+func logLineLocation(text string) *time.Location {
+	m := reTimestamp.FindStringSubmatch(text)
+	if m == nil {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, m[1])
+	if err != nil {
+		return nil
+	}
+	return t.Location()
+}
+
 func extractTo(text string) string {
 	m := reTo.FindStringSubmatch(text)
 	if m == nil {
@@ -284,9 +314,27 @@ func extractSubject(text string) string {
 	raw := strings.TrimSpace(m[1])
 	dec := new(mime.WordDecoder)
 	if decoded, err := dec.DecodeHeader(raw); err == nil {
-		return decoded
+		raw = decoded
 	}
-	return raw
+	return sanitizeText(raw)
+}
+
+// sanitizeText makes a decoded header safe to display: it forces valid UTF-8 and
+// strips control characters (folding newlines/tabs to spaces) so nothing renders
+// as "funny characters". HTML escaping still happens in the UI on top of this.
+func sanitizeText(s string) string {
+	if !utf8.ValidString(s) {
+		s = strings.ToValidUTF8(s, "�")
+	}
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			return ' '
+		case unicode.IsControl(r):
+			return -1
+		}
+		return r
+	}, s))
 }
 
 func extractSize(text string) int64 {

@@ -6,13 +6,14 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 type Watcher struct {
 	path           string
 	store          *Store
-	offset         int64
+	offset         atomic.Int64
 	pending        map[string][]string
 	pendingConnect string
 	pendingTLS     string
@@ -25,15 +26,19 @@ type Watcher struct {
 }
 
 func NewWatcher(path string, store *Store, offset int64) *Watcher {
-	return &Watcher{
+	w := &Watcher{
 		path:      path,
 		store:     store,
-		offset:    offset,
 		pending:   make(map[string][]string),
 		verdicts:  make(map[string]filterVerdict),
 		verdictTS: make(map[string]time.Time),
 	}
+	w.offset.Store(offset)
+	return w
 }
+
+// Offset returns the current tail position (bytes consumed from the active log).
+func (w *Watcher) Offset() int64 { return w.offset.Load() }
 
 func (w *Watcher) Run(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
@@ -42,7 +47,7 @@ func (w *Watcher) Run(ctx context.Context) {
 	flushTicker := time.NewTicker(30 * time.Second)
 	defer flushTicker.Stop()
 
-	log.Printf("watcher: tailing %s from offset %d", w.path, w.offset)
+	log.Printf("watcher: tailing %s from offset %d", w.path, w.offset.Load())
 
 	for {
 		select {
@@ -62,11 +67,13 @@ func (w *Watcher) tick() {
 		return
 	}
 
-	if info.Size() < w.offset {
-		log.Printf("watcher: file rotated (size %d < offset %d), resetting", info.Size(), w.offset)
-		w.offset = 0
+	off := w.offset.Load()
+	if info.Size() < off {
+		log.Printf("watcher: file rotated (size %d < offset %d), resetting", info.Size(), off)
+		off = 0
+		w.offset.Store(0)
 	}
-	if info.Size() == w.offset {
+	if info.Size() == off {
 		return
 	}
 
@@ -76,7 +83,7 @@ func (w *Watcher) tick() {
 	}
 	defer f.Close()
 
-	if _, err := f.Seek(w.offset, 0); err != nil {
+	if _, err := f.Seek(off, 0); err != nil {
 		return
 	}
 
@@ -86,7 +93,8 @@ func (w *Watcher) tick() {
 		if err != nil {
 			break
 		}
-		w.offset += int64(len(line))
+		off += int64(len(line))
+		w.offset.Store(off)
 		w.processLine(strings.TrimRight(line, "\n\r"))
 	}
 }

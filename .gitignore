@@ -17,6 +17,9 @@ logs/
 *.out
 coverage.txt
 
+# Local CodeQL scan output (scripts/local-ci.sh codeql)
+*.sarif
+
 # IDE / editor
 .idea/
 .vscode/

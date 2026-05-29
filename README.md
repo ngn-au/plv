@@ -228,9 +228,16 @@ If neither variable is set, authentication is disabled entirely — only do this
 | `RETENTION_DAYS` | No | Number of days to keep records when using PostgreSQL. Omit to keep data indefinitely. |
 | `AUTH_USERNAME` | No | Login username. Both `AUTH_USERNAME` and `AUTH_PASSWORD_HASH` must be set to enable auth. |
 | `AUTH_PASSWORD_HASH` | No | Bcrypt hash of the login password (from `plv hash`). |
+| `AUTH_DISABLE` | No | Run with no authentication (otherwise a receiver auto-generates a login on first start). |
+| `PLV_POSTFIX_CONF` | No | Path to a read-only `/etc/postfix`; PLV derives `mynetworks` + local domains to classify mail direction more accurately, re-reading on change. |
+| `PLV_INGEST_ADDR` | No | Distributed **receiver**: mTLS ingest listen address (e.g. `:8443`). |
+| `PLV_FORWARD_TO` | No | Distributed **forwarder**: receiver URL to ship records to (headless, no UI). |
+| `PLV_DATA_DIR` | No | PKI / state directory for distributed mode (default `/data`). |
 
 Command-line flags: `-addr` (listen address, default `:8080`) and `-logdir` (log directory, default
-`/var/log`). See **[`docs/configuration.md`](./docs/configuration.md)** for the full reference.
+`/var/log`). For distributed mode (mTLS forwarders → a central receiver) and direction-from-Postfix
+config, see **[`docs/configuration.md`](./docs/configuration.md)** and
+**[`docs/dev-test-stack.md`](./docs/dev-test-stack.md)**.
 
 ## Enabling subject logging in Postfix
 

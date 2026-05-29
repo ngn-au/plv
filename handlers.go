@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,7 +82,9 @@ func NewServer(store *Store, addr string, auth *AuthConfig) *http.Server {
 	mux.HandleFunc("/api/records", handleRecords(store))
 	mux.HandleFunc("/api/detail", handleDetail(store))
 	mux.HandleFunc("/api/stats", handleStats(store))
+	mux.HandleFunc("/api/suggest", handleSuggest(store))
 	mux.HandleFunc("/api/status", handleStatus(store))
+	mux.HandleFunc("/api/serverconf", handleServerConf(store))
 
 	var handler http.Handler = mux
 	if auth != nil && auth.Enabled {
@@ -129,7 +132,7 @@ func logMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		if r.URL.Path != "/api/status" {
-			log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start).Round(time.Millisecond))
+			log.Printf("%s %s %s", logSafe(r.Method), logSafe(r.URL.Path), time.Since(start).Round(time.Millisecond))
 		}
 	})
 }
@@ -168,6 +171,7 @@ func handleLogin(auth *AuthConfig, sessions *SessionStore) http.HandlerFunc {
 			Value:    token,
 			Path:     "/",
 			HttpOnly: true,
+			Secure:   secureRequest(r),
 			SameSite: http.SameSiteLaxMode,
 			MaxAge:   86400,
 		})
@@ -185,10 +189,20 @@ func handleLogout(sessions *SessionStore) http.HandlerFunc {
 			Value:    "",
 			Path:     "/",
 			HttpOnly: true,
+			Secure:   secureRequest(r),
+			SameSite: http.SameSiteLaxMode,
 			MaxAge:   -1,
 		})
 		http.Redirect(w, r, "/login", http.StatusFound)
 	}
+}
+
+// secureRequest reports whether the request reached PLV over HTTPS — directly or via a
+// TLS-terminating reverse proxy (the common deployment) advertising X-Forwarded-Proto.
+// The session cookie's Secure flag is set accordingly: enforced over HTTPS, but not so
+// hard-set that it breaks a plain-HTTP login on a trusted network.
+func secureRequest(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -218,26 +232,40 @@ func handleRecords(store *Store) http.HandlerFunc {
 			length = 500
 		}
 		search := q.Get("search[value]")
-		orderCol, _ := strconv.Atoi(q.Get("order[0][column]"))
+		// DataTables sends the display-column index in order[0][column]; map it to the
+		// stable data-array index via columns[i][data] so sorting is independent of
+		// column layout (e.g. the optional Server column).
+		orderDisplay, _ := strconv.Atoi(q.Get("order[0][column]"))
+		orderCol := orderDisplay
+		if d := q.Get("columns[" + strconv.Itoa(orderDisplay) + "][data]"); d != "" {
+			if n, err := strconv.Atoi(d); err == nil {
+				orderCol = n
+			}
+		}
 		orderDir := q.Get("order[0][dir]")
 		if orderDir != "asc" && orderDir != "desc" {
 			orderDir = "desc"
 		}
 
 		result := store.Search(SearchParams{
-			Draw:          draw,
-			Start:         start,
-			Length:        length,
-			SearchTerm:    search,
-			OrderCol:      orderCol,
-			OrderDir:      orderDir,
-			FilterFrom:    q.Get("f_from"),
-			FilterTo:      q.Get("f_to"),
-			FilterClient:  q.Get("f_client"),
-			FilterRelay:   q.Get("f_relay"),
-			FilterStatus:  q.Get("f_status"),
-			FilterQueueID: q.Get("f_qid"),
-			FilterTLS:     q.Get("f_tls"),
+			Draw:            draw,
+			Start:           start,
+			Length:          length,
+			SearchTerm:      search,
+			OrderCol:        orderCol,
+			OrderDir:        orderDir,
+			FilterFrom:      q.Get("f_from"),
+			FilterTo:        q.Get("f_to"),
+			FilterSubject:   q.Get("f_subject"),
+			FilterClient:    q.Get("f_client"),
+			FilterRelay:     q.Get("f_relay"),
+			FilterStatus:    q.Get("f_status"),
+			FilterQueueID:   q.Get("f_qid"),
+			FilterTLS:       q.Get("f_tls"),
+			FilterNDR:       q.Get("f_ndr"),
+			FilterServer:    q.Get("f_server"),
+			FilterDirection: q.Get("f_direction"),
+			Group:           q.Get("group") == "1",
 		})
 
 		w.Header().Set("Content-Type", "application/json")
@@ -252,7 +280,7 @@ func handleDetail(store *Store) http.HandlerFunc {
 			http.Error(w, `{"error":"missing qid"}`, http.StatusBadRequest)
 			return
 		}
-		detail := store.GetDetail(qid)
+		detail := store.GetDetail(r.URL.Query().Get("origin"), qid)
 		if detail == nil {
 			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 			return
@@ -264,9 +292,42 @@ func handleDetail(store *Store) http.HandlerFunc {
 
 func handleStats(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		stats := store.Stats()
+		q := r.URL.Query()
+		stats := store.Stats(SearchParams{
+			SearchTerm:      q.Get("search"),
+			FilterFrom:      q.Get("f_from"),
+			FilterTo:        q.Get("f_to"),
+			FilterSubject:   q.Get("f_subject"),
+			FilterClient:    q.Get("f_client"),
+			FilterRelay:     q.Get("f_relay"),
+			FilterStatus:    q.Get("f_status"),
+			FilterQueueID:   q.Get("f_qid"),
+			FilterTLS:       q.Get("f_tls"),
+			FilterNDR:       q.Get("f_ndr"),
+			FilterServer:    q.Get("f_server"),
+			FilterDirection: q.Get("f_direction"),
+		})
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(stats)
+	}
+}
+
+func handleSuggest(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		items := store.Suggest(r.URL.Query().Get("field"), 800)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(items)
+	}
+}
+
+func handleServerConf(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		confs := store.ServerConfs()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"configured": len(confs) > 0,
+			"servers":    confs,
+		})
 	}
 }
 
@@ -275,9 +336,10 @@ func handleStatus(store *Store) http.HandlerFunc {
 		ready, status, count := store.GetStatus()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"ready":   ready,
-			"status":  status,
-			"records": count,
+			"ready":       ready,
+			"status":      status,
+			"records":     count,
+			"has_origins": store.HasOrigins(),
 		})
 	}
 }
