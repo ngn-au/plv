@@ -26,7 +26,7 @@ not.
 | Disposition | Meaning |
 |---|---|
 | `sent` | Delivered / relayed, or accepted clean by the local filter. |
-| `spam` | Moved to spam quarantine, or rejected as "Blocked by SpamAssassin", or rspamd `reject`/`add header`/`rewrite subject`. |
+| `spam` | Moved to spam quarantine, rejected as "Blocked by SpamAssassin", or rspamd `reject`. (rspamd `add header`/`rewrite subject` only *tag* a message that is still delivered — they keep the delivered disposition; see below.) |
 | `blocked` | Filter explicitly blocked the message. |
 | `virus` | Virus quarantine. |
 | `rejected` | Rejected — including SMTP-time `NOQUEUE` rejections (RBL, relay, postscreen, policy). |
@@ -88,9 +88,15 @@ that queue id. It never creates a standalone record from an rspamd line. Action 
 
 | rspamd action | Disposition |
 |---|---|
-| `reject`, `add header`, `rewrite subject` | `spam` |
+| `reject` | `spam` (the message was actually stopped) |
+| `add header`, `rewrite subject` | unchanged — the message is only *tagged* (an `X-Spam` header / rewritten subject) and is still **delivered**, so the Postfix-derived disposition stands. The spam score still rides along on the record (shown in the Scanner panel), so the flagging stays visible. |
 | `soft reject`, `greylist` | `deferred` |
 | `no action` (and anything else) | unchanged (keeps the Postfix-derived disposition) |
+
+This mirrors PLV's purpose: correct `status=sent` only when the scanner *quarantines or blocks*.
+An `add header`/`rewrite subject` neither holds nor refuses the mail — it reaches the mailbox — so it
+must not read as `spam`. (Earlier versions classified all three as `spam`, which made a delivered
+message show both "spam" and "delivered to mailbox".)
 
 Because the verdict can be written just before PLV finalizes the mail record in live mode, an rspamd
 verdict whose record hasn't been seen yet is held briefly (pending) and applied when the record
@@ -116,6 +122,46 @@ For ordinary messages with no content-filter involvement, `deriveDisposition` ma
 status: `sent`→`sent`, `bounced`→`bounced`, `deferred`→`deferred`, and `reject` →
 `spam`/`virus`/`rejected` depending on whether the detail mentions SpamAssassin/spam or virus (this
 catches milter rejections such as "Blocked by SpamAssassin" that reach `mail.log`).
+
+## Message direction (inbound / outbound / internal / relayed)
+
+Separate from disposition, PLV labels each message's **direction**, derived purely from log
+facts so it generalises across standalone, milter, content-filter and relay-pair setups
+(see [`direction.go`](../direction.go)). It uses three per-leg signals, aggregated across all
+legs of a message (records sharing a Message-ID):
+
+- **received-public-unauth** — the leg's `client=` IP is public *and* the leg carries no
+  `sasl_username=`. The signature of mail arriving from the internet. (An authenticated
+  submission from a public IP is a *user sending*, not inbound.)
+- **sends-public** — the leg's `relay=` IP is public *and* it is not a local delivery
+  (loopback content-filter hand-offs are private; `lmtp`/`dovecot`/`local`/`virtual` or a
+  "… Saved" / "delivered to mailbox" detail are terminal, not an external send).
+- **delivers-local** — a terminal local-mailbox delivery.
+
+A fourth, **relay-leg**, is the key to telling transit apart from gateway delivery: a
+*single* queue id that both received-public-unauth **and** sends-public, **and** is not a
+content-filter re-injection. Re-injection is detected by `DeliveryQueueID` (the
+`accept mail … (qid)` merge that links a scanner leg to its onward leg) or an `orig_client=`
+on the leg. This matters because a content-filter gateway delivers **inbound** mail onward to
+a backend mailserver that often has a *public* IP — which, once the scanner and onward legs
+are merged, looks exactly like a public→public relay. Requiring a single un-merged leg avoids
+mislabelling all such inbound mail as relayed (this was verified against the PMG sample, where
+the naive rule mis-classed ~37k inbound messages).
+
+The classification, in order:
+
+| Direction | Rule |
+|---|---|
+| `relayed` | has a relay-leg **and** no local delivery — pure transit (external→us→external), e.g. a PBX/appliance on a public IP shipping notifications out through us to an external recipient. |
+| `inbound` | received from the internet (and not pure relay) — including content-filter inbound to a public-IP backend, and a relay that *also* delivered locally. |
+| `outbound` | sent to the internet (authenticated submission, or an internal client relaying out). |
+| `internal` | neither — internal sender to internal/local recipient. |
+
+Cross-platform caveat: direction rests on public-vs-private IPs, SASL auth and local-delivery
+markers — never on hard-coded hostnames. The one inherent ambiguity is a site that relays
+*inbound* mail to a backend over a **public** IP in a single un-filtered hop (no content
+filter, no local delivery): from the logs alone that is indistinguishable from transit, and
+reads as `relayed`. Content-filtered and private-backend setups are unaffected.
 
 ## When you change this model
 

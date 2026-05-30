@@ -6,6 +6,62 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Distributed mode (mTLS forwarders → receiver)** — run PLV headless on each mail server as a
+  *forwarder* that tails its logs and ships fully-merged records over mutually-authenticated TLS to
+  a central *receiver* that presents one combined view. New env: `PLV_FORWARD_TO` (forwarder),
+  `PLV_INGEST_ADDR` (receiver), `PLV_DATA_DIR` (PKI/state). A built-in CA and enrolment flow —
+  `plv pki init` / `plv pki server` / `plv pki ticket`, `plv enroll`, and an interactive
+  `plv wizard` — issue each forwarder a client certificate whose CN becomes its name in the new
+  **Server** column. Records are keyed by `(server, queue-id)`; the same Message-ID seen on
+  multiple servers is surfaced as a cross-node link.
+- **Mail-direction classification** — every message is labelled **inbound / outbound / internal /
+  relayed**, derived purely from log facts (public/private client & relay IPs, SASL auth,
+  local-delivery markers, content-filter reinjection). `relayed` denotes true external→us→external
+  transit. Surfaced as a sortable **Direction** column, filter chips, and a dashboard direction-card
+  row.
+- **Direction from Postfix config** — point `PLV_POSTFIX_CONF` at a read-only `/etc/postfix` and PLV
+  derives **mynetworks** (trusted networks) and **local/hosted domains** (from `mydestination`,
+  `relay_domains`, `virtual_*_domains`, following file-backed lookup tables) to sharpen direction —
+  e.g. a content-filter gateway's own backend (a public IP in mynetworks) submitting outbound mail
+  is no longer mistaken for inbound. Re-derived live when the config changes; in distributed mode
+  each forwarder ships its own config so the receiver classifies per-server. Over-broad mynetworks
+  entries (`>/16`) are dropped as a safety rail.
+- **Servers page** — a header panel listing the Postfix settings PLV actually uses (mynetworks +
+  local domains) per server, with a chip per forwarder in distributed mode.
+- **Detail modal redesign** — the status is shown as an event cascade that mirrors the mail-path
+  graphic (From → server hops → flagged result), with the recipient for delivered/sent or the
+  verdict + reason for spam/blocked/etc. Adds a mail-path visualisation and a per-message log
+  timeline (chronological, with a raw toggle).
+- **Dashboard** — direction cards, a per-graph note of the active filters, a header summary of how
+  many days of mail are loaded and the configured retention, and an adaptive Message-Volume axis
+  (rolls hourly buckets up to days over long spans).
+- **`AUTH_DISABLE`** — explicitly run with authentication off (otherwise a receiver auto-generates a
+  login and prints it once on first start).
+
+### Changed
+
+- **rspamd `add header` / `rewrite subject` are now `delivered`, not `spam`** — those actions only
+  *tag* a message that is still delivered; only `reject` blocks it. The spam score still rides along
+  on the record. (The disposition model also distinguishes `delivered` from relayed `sent`, and adds
+  `incomplete` for never-queued sessions.)
+- Mail-history days + configured retention are surfaced in the header; the stat cards remain global
+  totals while the charts/top-N reflect the active filters.
+
+### Fixed
+
+- Parser: extract the Subject for locally-submitted mail (`from local;`); capture the PMG `block`
+  rule; `client=` hostname truncation; `received` now requires a queued `size=`; a NOQUEUE reject's
+  server role reads `rejected`.
+- rspamd log lines in the timeline are normalised to the Postfix offset so they sort chronologically
+  instead of skewing by the host time zone.
+- Mail path: a NOQUEUE reject stops at the server (nothing was relayed onward); inbound mail relayed
+  to a backend shows the recipient instead of dead-ending.
+- A filter that yields no rows now clears the volume chart instead of leaving a stale curve.
+- **Graceful session expiry** — an expired session redirects to a "Session expired" login instead of
+  surfacing a raw DataTables Ajax-error dialog.
+
 ## [1.0.0] — 2026-05-26
 
 First public release.

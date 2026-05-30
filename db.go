@@ -69,11 +69,27 @@ func (db *DB) Migrate() error {
 		ALTER TABLE mail_records ADD COLUMN IF NOT EXISTS filter_id     TEXT NOT NULL DEFAULT '';
 		ALTER TABLE mail_records ADD COLUMN IF NOT EXISTS delivery_queue_id TEXT NOT NULL DEFAULT '';
 		ALTER TABLE mail_records ADD COLUMN IF NOT EXISTS subsumed      BOOLEAN NOT NULL DEFAULT FALSE;
+		-- Distributed mode: records are identified by (origin, queue_id) so two
+		-- servers can share a queue id. Add the column, then replace the single-column
+		-- queue_id primary key with a composite one. This upgrades in place: existing
+		-- rows get origin='' and their queue_ids are already unique, so the composite
+		-- key is valid. Guarded so it runs once (the IF only matches a 1-column PK).
+		ALTER TABLE mail_records ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT '';
+		DO $$ BEGIN
+			IF EXISTS (
+				SELECT 1 FROM pg_constraint
+				WHERE conname = 'mail_records_pkey' AND array_length(conkey, 1) = 1
+			) THEN
+				ALTER TABLE mail_records DROP CONSTRAINT mail_records_pkey;
+				ALTER TABLE mail_records ADD CONSTRAINT mail_records_pkey PRIMARY KEY (origin, queue_id);
+			END IF;
+		END $$;
 		CREATE INDEX IF NOT EXISTS idx_mail_records_timestamp ON mail_records(timestamp DESC);
 		CREATE INDEX IF NOT EXISTS idx_mail_records_from ON mail_records(from_addr);
 		CREATE INDEX IF NOT EXISTS idx_mail_records_to ON mail_records(to_addr);
 		CREATE INDEX IF NOT EXISTS idx_mail_records_status ON mail_records(status);
 		CREATE INDEX IF NOT EXISTS idx_mail_records_disposition ON mail_records(disposition);
+		CREATE INDEX IF NOT EXISTS idx_mail_records_origin ON mail_records(origin);
 	`)
 	return err
 }
@@ -83,7 +99,7 @@ func (db *DB) LoadAll() ([]Record, error) {
 		SELECT queue_id, timestamp, from_addr, to_addr, subject, size,
 		       message_id, status, status_detail, relay, client, tls, raw_lines,
 		       disposition, filter, filter_action, spam_score, filter_rule, filter_id,
-		       delivery_queue_id, subsumed
+		       delivery_queue_id, subsumed, origin
 		FROM mail_records ORDER BY timestamp DESC
 	`)
 	if err != nil {
@@ -101,7 +117,7 @@ func (db *DB) LoadAll() ([]Record, error) {
 			&r.MessageID, &r.Status, &r.StatusDetail, &r.Relay, &r.Client, &r.TLS,
 			pq.Array(&rawLines),
 			&r.Disposition, &r.Filter, &r.FilterAction, &r.SpamScore, &r.FilterRule, &r.FilterID,
-			&r.DeliveryQueueID, &r.Subsumed,
+			&r.DeliveryQueueID, &r.Subsumed, &r.Origin,
 		)
 		if err != nil {
 			return nil, err
@@ -168,10 +184,10 @@ func (db *DB) upsertBatchFallback(records []Record) error {
 		INSERT INTO mail_records (queue_id, timestamp, from_addr, to_addr, subject, size,
 			message_id, status, status_detail, relay, client, tls, raw_lines,
 			disposition, filter, filter_action, spam_score, filter_rule, filter_id,
-			delivery_queue_id, subsumed)
+			delivery_queue_id, subsumed, origin)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-			$14, $15, $16, $17, $18, $19, $20, $21)
-		ON CONFLICT (queue_id) DO UPDATE SET
+			$14, $15, $16, $17, $18, $19, $20, $21, $22)
+		ON CONFLICT (origin, queue_id) DO UPDATE SET
 			timestamp     = EXCLUDED.timestamp,
 			from_addr     = EXCLUDED.from_addr,
 			to_addr       = EXCLUDED.to_addr,
@@ -213,7 +229,7 @@ func (db *DB) upsertBatchFallback(records []Record) error {
 			r.MessageID, r.Status, r.StatusDetail, r.Relay, r.Client, r.TLS,
 			pq.Array(rawLines),
 			r.Disposition, r.Filter, r.FilterAction, r.SpamScore, r.FilterRule, r.FilterID,
-			r.DeliveryQueueID, r.Subsumed,
+			r.DeliveryQueueID, r.Subsumed, r.Origin,
 		)
 		if err != nil {
 			return fmt.Errorf("upsert %s: %w", r.QueueID, err)
@@ -250,8 +266,8 @@ func buildSearchQuery(p SearchParams) (string, []interface{}) {
 		conditions = append(conditions, fmt.Sprintf(`(
 			queue_id ILIKE $%d OR from_addr ILIKE $%d OR to_addr ILIKE $%d OR
 			subject ILIKE $%d OR message_id ILIKE $%d OR status ILIKE $%d OR
-			relay ILIKE $%d OR client ILIKE $%d
-		)`, n, n, n, n, n, n, n, n))
+			relay ILIKE $%d OR client ILIKE $%d OR origin ILIKE $%d
+		)`, n, n, n, n, n, n, n, n, n))
 		args = append(args, "%"+p.SearchTerm+"%")
 		n++
 	}
@@ -283,7 +299,7 @@ func buildSearchQuery(p SearchParams) (string, []interface{}) {
 	if p.FilterQueueID != "" {
 		conditions = append(conditions, fmt.Sprintf("queue_id ILIKE $%d", n))
 		args = append(args, "%"+p.FilterQueueID+"%")
-		n++
+		// no n++: queue_id is the last numbered placeholder; nothing below reads n.
 	}
 	if p.FilterTLS == "yes" {
 		conditions = append(conditions, "tls != ''")

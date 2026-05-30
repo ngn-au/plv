@@ -10,7 +10,10 @@ import (
 )
 
 type Record struct {
-	Timestamp    time.Time
+	Timestamp time.Time
+	// Origin is the forwarding server's name (its client-cert CN, stamped by the
+	// receiver); empty in standalone mode. Part of the identity: (Origin, QueueID).
+	Origin       string
 	QueueID      string
 	From         string
 	To           string
@@ -54,7 +57,126 @@ type Store struct {
 	rspamdPending map[string]rspamdVerdict
 	ready         bool
 	status        string
+	hasOrigins    bool                    // any record carries a non-empty Origin (distributed mode)
+	retentionDays int                     // configured RETENTION_DAYS (0 = disabled); surfaced in Stats
+	pcfg          *PostfixConf            // local Postfix config (standalone / receiver fallback); may be nil
+	pcfgByOrigin  map[string]*PostfixConf // per-forwarder config (distributed), keyed by origin/CN
 	db            *DB
+	sink          RecordSink // forwarder mode: ship merged snapshots to a receiver
+}
+
+// SetRetentionDays records the configured retention window so the UI can show it.
+func (s *Store) SetRetentionDays(days int) {
+	s.mu.Lock()
+	s.retentionDays = days
+	s.mu.Unlock()
+}
+
+// SetPostfixConf swaps in the latest Postfix-derived direction facts (mynetworks / local
+// domains). Safe to call live from the config watcher.
+func (s *Store) SetPostfixConf(pc *PostfixConf) {
+	s.mu.Lock()
+	s.pcfg = pc
+	s.mu.Unlock()
+}
+
+// SetPostfixConfForOrigin records a forwarder's config under its origin/CN (distributed
+// mode), so direction for that server's mail uses its own mynetworks / local domains. It
+// reports whether the config actually changed, so the heartbeat (which re-sends the same
+// config) doesn't spam logs.
+func (s *Store) SetPostfixConfForOrigin(origin string, pc *PostfixConf) bool {
+	if origin == "" || pc == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pcfgByOrigin == nil {
+		s.pcfgByOrigin = map[string]*PostfixConf{}
+	}
+	if old := s.pcfgByOrigin[origin]; old != nil && old.signature() == pc.signature() {
+		return false
+	}
+	s.pcfgByOrigin[origin] = pc
+	return true
+}
+
+// confFor returns the Postfix config to use for a record's origin: the forwarder's own
+// config in distributed mode, else the local/standalone config. Caller holds the lock.
+func (s *Store) confFor(origin string) *PostfixConf {
+	if origin != "" && s.pcfgByOrigin != nil {
+		if pc := s.pcfgByOrigin[origin]; pc != nil {
+			return pc
+		}
+	}
+	return s.pcfg
+}
+
+// ServerConfInfo is the PLV-relevant Postfix settings of one server, for the Servers page.
+type ServerConfInfo struct {
+	Name         string   `json:"name"`
+	LocalDomains []string `json:"local_domains"`
+	Networks     []string `json:"networks"`
+}
+
+// ServerConfs returns the derived Postfix settings per server (one entry in standalone;
+// nil when no config is loaded). Only the two settings PLV actually uses for direction —
+// mynetworks (trusted networks) and the local/hosted domains — are surfaced.
+func (s *Store) ServerConfs() []ServerConfInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	info := func(origin string, pc *PostfixConf) ServerConfInfo {
+		doms := make([]string, 0, len(pc.LocalDomains))
+		for d := range pc.LocalDomains {
+			doms = append(doms, d)
+		}
+		sort.Strings(doms)
+		nets := make([]string, 0, len(pc.Networks))
+		for _, n := range pc.Networks {
+			nets = append(nets, n.String())
+		}
+		sort.Strings(nets)
+		name := origin
+		if name == "" {
+			name = pc.Hostname
+		}
+		if name == "" {
+			name = "this server"
+		}
+		return ServerConfInfo{Name: name, LocalDomains: doms, Networks: nets}
+	}
+	var out []ServerConfInfo
+	origins := make([]string, 0, len(s.pcfgByOrigin))
+	for o := range s.pcfgByOrigin {
+		origins = append(origins, o)
+	}
+	sort.Strings(origins)
+	for _, o := range origins {
+		out = append(out, info(o, s.pcfgByOrigin[o]))
+	}
+	if s.pcfg != nil {
+		out = append(out, info("", s.pcfg))
+	}
+	return out
+}
+
+// RecordSink receives fully-merged record snapshots. In forwarder mode the store
+// hands snapshots to a sink that batches and ships them to the receiver, in place
+// of writing to a database. Enqueue must not block.
+type RecordSink interface {
+	Enqueue([]Record)
+}
+
+// recKey is a record's in-memory identity. Two servers can emit the same Postfix
+// queue id, so the origin (forwarding server) is part of the key.
+func recKey(origin, qid string) string { return origin + "\x00" + qid }
+
+// logSafe renders a value for logging with line breaks removed, so attacker-influenced
+// data — forwarded record fields, a client-cert CN — can't forge or split log lines.
+func logSafe(v interface{}) string {
+	s := fmt.Sprintf("%v", v)
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	return s
 }
 
 func NewStore(db *DB) *Store {
@@ -64,6 +186,30 @@ func NewStore(db *DB) *Store {
 		rspamdPending: make(map[string]rspamdVerdict),
 		status:        "initializing",
 		db:            db,
+	}
+}
+
+// SetSink installs a forwarder sink. Records the store merges are then shipped to
+// it (in addition to any DB). Call before parsing begins.
+func (s *Store) SetSink(sink RecordSink) { s.sink = sink }
+
+// persisting reports whether merged snapshots need to be captured (for a DB and/or
+// a forwarder sink).
+func (s *Store) persisting() bool { return s.db != nil || s.sink != nil }
+
+// flush hands merged snapshots to the DB and/or the forwarder sink. Called without
+// the store lock held.
+func (s *Store) flush(records []Record) {
+	if len(records) == 0 {
+		return
+	}
+	if s.db != nil {
+		if err := s.db.UpsertRecords(records); err != nil {
+			log.Printf("db persist error: %v", err)
+		}
+	}
+	if s.sink != nil {
+		s.sink.Enqueue(records)
 	}
 }
 
@@ -77,19 +223,24 @@ func (s *Store) LoadFromDB() error {
 	}
 	s.mu.Lock()
 	for _, r := range records {
+		if r.Origin != "" {
+			s.hasOrigins = true
+		}
 		if r.Subsumed {
 			continue // merged into another item; not loaded as its own row
 		}
-		if _, exists := s.byQueueID[r.QueueID]; !exists {
+		key := recKey(r.Origin, r.QueueID)
+		if _, exists := s.byQueueID[key]; !exists {
 			idx := len(s.records)
-			s.byQueueID[r.QueueID] = idx
+			s.byQueueID[key] = idx
 			s.records = append(s.records, r)
 			// Restore the delivery link so the outbound queue id resolves to this
 			// merged primary for search/detail.
 			if r.DeliveryQueueID != "" {
-				s.byDelivery[r.DeliveryQueueID] = idx
-				if _, ok := s.byQueueID[r.DeliveryQueueID]; !ok {
-					s.byQueueID[r.DeliveryQueueID] = idx
+				dkey := recKey(r.Origin, r.DeliveryQueueID)
+				s.byDelivery[dkey] = idx
+				if _, ok := s.byQueueID[dkey]; !ok {
+					s.byQueueID[dkey] = idx
 				}
 			}
 		}
@@ -101,27 +252,32 @@ func (s *Store) LoadFromDB() error {
 
 func (s *Store) AddRecords(records []Record) {
 	s.mu.Lock()
+	persist := s.persisting()
 	var toUpsert []Record
 	for _, r := range records {
+		if r.Origin != "" {
+			s.hasOrigins = true
+		}
+		key := recKey(r.Origin, r.QueueID)
 		// (1) A re-injected outbound leg whose inbound primary we already have:
 		// fold the final delivery into the primary instead of adding a new row.
-		if pIdx, ok := s.byDelivery[r.QueueID]; ok && pIdx < len(s.records) {
+		if pIdx, ok := s.byDelivery[key]; ok && pIdx < len(s.records) {
 			mergeDeliveryLeg(&s.records[pIdx], &r)
-			s.byQueueID[r.QueueID] = pIdx // resolve the outbound id to the primary
-			if s.db != nil {
+			s.byQueueID[key] = pIdx // resolve the outbound id to the primary
+			if persist {
 				toUpsert = append(toUpsert, snapshotRecord(&s.records[pIdx]))
 			}
 			continue
 		}
 
 		// (2) Same queue id seen again: merge incrementally (as before).
-		if idx, exists := s.byQueueID[r.QueueID]; exists && !s.records[idx].Subsumed {
+		if idx, exists := s.byQueueID[key]; exists && !s.records[idx].Subsumed {
 			s.mergeRecord(&s.records[idx], &r)
 			if r.DeliveryQueueID != "" {
 				s.registerDelivery(idx, &toUpsert)
 			}
 			s.applyPendingRspamd(idx)
-			if s.db != nil {
+			if persist {
 				toUpsert = append(toUpsert, snapshotRecord(&s.records[idx]))
 			}
 			continue
@@ -129,22 +285,77 @@ func (s *Store) AddRecords(records []Record) {
 
 		// (3) New record.
 		idx := len(s.records)
-		s.byQueueID[r.QueueID] = idx
+		s.byQueueID[key] = idx
 		s.records = append(s.records, r)
 		if r.DeliveryQueueID != "" {
 			s.registerDelivery(idx, &toUpsert)
 		}
 		s.applyPendingRspamd(idx)
-		if s.db != nil {
+		if persist {
 			toUpsert = append(toUpsert, snapshotRecord(&s.records[idx]))
 		}
 	}
 	s.mu.Unlock()
 
-	if s.db != nil && len(toUpsert) > 0 {
-		if err := s.db.UpsertRecords(toUpsert); err != nil {
-			log.Printf("db persist error: %v", err)
+	s.flush(toUpsert)
+}
+
+// IngestSnapshots upserts already-merged records forwarded from another instance.
+// origin (the forwarder's verified client-cert CN) is stamped authoritatively,
+// overriding whatever the payload claimed. No leg-merge/correlation runs here —
+// that happened on the forwarder; this mirrors the DB-load reconstruction
+// (subsumed legs are persisted but not listed; the delivery link is restored from
+// the primary). Returns the number of records accepted.
+func (s *Store) IngestSnapshots(origin string, records []Record) int {
+	s.mu.Lock()
+	var toPersist []Record
+	accepted := 0
+	for i := range records {
+		r := records[i]
+		r.Origin = origin
+		if origin != "" {
+			s.hasOrigins = true
 		}
+		accepted++
+		if s.db != nil {
+			toPersist = append(toPersist, snapshotRecord(&r))
+		}
+		if r.Subsumed {
+			continue // merged into a primary on the forwarder; not its own row
+		}
+		key := recKey(origin, r.QueueID)
+		if idx, ok := s.byQueueID[key]; ok && idx < len(s.records) &&
+			s.records[idx].Origin == origin && s.records[idx].QueueID == r.QueueID && !s.records[idx].Subsumed {
+			s.records[idx] = r // replace with the latest snapshot
+			s.restoreDeliveryLink(idx)
+		} else {
+			idx := len(s.records)
+			s.byQueueID[key] = idx
+			s.records = append(s.records, r)
+			s.restoreDeliveryLink(idx)
+		}
+	}
+	s.mu.Unlock()
+
+	if s.db != nil && len(toPersist) > 0 {
+		if err := s.db.UpsertRecords(toPersist); err != nil {
+			log.Printf("db persist error: %s", logSafe(err)) // forwarded data may taint the error
+		}
+	}
+	return accepted
+}
+
+// restoreDeliveryLink makes the record's onward (post-filter) queue id resolve to
+// the primary at idx, so either id is searchable. Caller holds s.mu.
+func (s *Store) restoreDeliveryLink(idx int) {
+	r := &s.records[idx]
+	if r.DeliveryQueueID == "" {
+		return
+	}
+	dkey := recKey(r.Origin, r.DeliveryQueueID)
+	s.byDelivery[dkey] = idx
+	if _, ok := s.byQueueID[dkey]; !ok {
+		s.byQueueID[dkey] = idx
 	}
 }
 
@@ -153,19 +364,16 @@ func (s *Store) AddRecords(records []Record) {
 // (briefly) until the record is added. Returns true when it matched a record.
 func (s *Store) ApplyRspamdVerdict(qid string, v rspamdVerdict) bool {
 	s.mu.Lock()
-	idx, ok := s.byQueueID[qid]
+	// rspamd correlation is always local to the parsing instance (origin is empty).
+	idx, ok := s.byQueueID[recKey("", qid)]
 	if ok && idx < len(s.records) && !s.records[idx].Subsumed {
 		enrichRecordWithRspamd(&s.records[idx], v)
-		var snap Record
-		if s.db != nil {
-			snap = snapshotRecord(&s.records[idx])
+		var snaps []Record
+		if s.persisting() {
+			snaps = []Record{snapshotRecord(&s.records[idx])}
 		}
 		s.mu.Unlock()
-		if s.db != nil {
-			if err := s.db.UpsertRecords([]Record{snap}); err != nil {
-				log.Printf("db persist error: %v", err)
-			}
-		}
+		s.flush(snaps)
 		return true
 	}
 	s.rspamdPending[qid] = v
@@ -201,13 +409,13 @@ func (s *Store) applyPendingRspamd(idx int) {
 // leg already arrived as a standalone row (rare; legs normally follow the primary),
 // merge it in now and mark it subsumed. Caller holds s.mu.
 func (s *Store) registerDelivery(idx int, toUpsert *[]Record) {
-	deliveryID := s.records[idx].DeliveryQueueID
-	s.byDelivery[deliveryID] = idx
-	if oIdx, ok := s.byQueueID[deliveryID]; ok && oIdx != idx && !s.records[oIdx].Subsumed {
+	dkey := recKey(s.records[idx].Origin, s.records[idx].DeliveryQueueID)
+	s.byDelivery[dkey] = idx
+	if oIdx, ok := s.byQueueID[dkey]; ok && oIdx != idx && !s.records[oIdx].Subsumed {
 		mergeDeliveryLeg(&s.records[idx], &s.records[oIdx])
 		s.records[oIdx].Subsumed = true
-		s.byQueueID[deliveryID] = idx
-		if s.db != nil {
+		s.byQueueID[dkey] = idx
+		if s.persisting() {
 			*toUpsert = append(*toUpsert, snapshotRecord(&s.records[oIdx]))
 		}
 	}
@@ -330,27 +538,31 @@ func (s *Store) mergeRecord(dst, src *Record) {
 }
 
 type RecordDetail struct {
-	Timestamp       string    `json:"timestamp"`
-	QueueID         string    `json:"queue_id"`
-	From            string    `json:"from"`
-	To              string    `json:"to"`
-	Subject         string    `json:"subject"`
-	Size            string    `json:"size"`
-	SizeBytes       int64     `json:"size_bytes"`
-	MessageID       string    `json:"message_id"`
-	Status          string    `json:"status"`
-	StatusDetail    string    `json:"status_detail"`
-	Relay           string    `json:"relay"`
-	Client          string    `json:"client"`
-	TLS             string    `json:"tls"`
-	Disposition     string    `json:"disposition"`
-	Filter          string    `json:"filter"`
-	FilterAction    string    `json:"filter_action"`
-	SpamScore       string    `json:"spam_score"`
-	FilterRule      string    `json:"filter_rule"`
-	FilterID        string    `json:"filter_id"`
-	DeliveryQueueID string    `json:"delivery_queue_id"`
-	Lines           []LogLine `json:"lines"`
+	Timestamp       string        `json:"timestamp"`
+	Origin          string        `json:"origin"`
+	QueueID         string        `json:"queue_id"`
+	From            string        `json:"from"`
+	To              string        `json:"to"`
+	Subject         string        `json:"subject"`
+	Size            string        `json:"size"`
+	SizeBytes       int64         `json:"size_bytes"`
+	MessageID       string        `json:"message_id"`
+	Status          string        `json:"status"`
+	StatusDetail    string        `json:"status_detail"`
+	Relay           string        `json:"relay"`
+	Client          string        `json:"client"`
+	TLS             string        `json:"tls"`
+	Disposition     string        `json:"disposition"`
+	Filter          string        `json:"filter"`
+	FilterAction    string        `json:"filter_action"`
+	SpamScore       string        `json:"spam_score"`
+	FilterRule      string        `json:"filter_rule"`
+	FilterID        string        `json:"filter_id"`
+	DeliveryQueueID string        `json:"delivery_queue_id"`
+	Direction       string        `json:"direction"` // inbound/outbound/internal/relayed (mynetworks + local-domain aware)
+	NDR             bool          `json:"ndr"`
+	Related         []RelatedItem `json:"related,omitempty"`
+	Lines           []LogLine     `json:"lines"`
 }
 
 type LogLine struct {
@@ -358,11 +570,20 @@ type LogLine struct {
 	Raw       string `json:"raw"`
 }
 
-func (s *Store) GetDetail(queueID string) *RecordDetail {
+// RelatedItem is the same message (matched by Message-ID) seen on another server —
+// surfaced as a cross-node link, never merged into the record.
+type RelatedItem struct {
+	Origin      string `json:"origin"`
+	QueueID     string `json:"queue_id"`
+	Disposition string `json:"disposition"`
+	Timestamp   string `json:"timestamp"`
+}
+
+func (s *Store) GetDetail(origin, queueID string) *RecordDetail {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	idx, ok := s.byQueueID[queueID]
+	idx, ok := s.byQueueID[recKey(origin, queueID)]
 	if !ok {
 		return nil
 	}
@@ -373,9 +594,23 @@ func (s *Store) GetDetail(queueID string) *RecordDetail {
 		ts = r.Timestamp.UTC().Format(time.RFC3339)
 	}
 
+	// rspamd lines are zone-less; parse them in the offset of the record's Postfix lines.
+	// Derive that from a raw line's RFC3339 text (always carries the offset, even after
+	// forwarding/merge) rather than r.Timestamp, whose zone may be normalised to UTC.
+	logLoc := time.Local
+	for _, raw := range r.RawLines {
+		if loc := logLineLocation(raw); loc != nil {
+			logLoc = loc
+			break
+		}
+	}
+
 	lines := make([]LogLine, 0, len(r.RawLines))
 	for _, raw := range r.RawLines {
 		lineTs := extractTimestamp(raw)
+		if lineTs.IsZero() {
+			lineTs = extractRspamdTimeIn(raw, logLoc) // zone-less rspamd line → log's offset
+		}
 		fmtTs := ""
 		if !lineTs.IsZero() {
 			fmtTs = lineTs.UTC().Format(time.RFC3339)
@@ -383,8 +618,34 @@ func (s *Store) GetDetail(queueID string) *RecordDetail {
 		lines = append(lines, LogLine{Timestamp: fmtTs, Raw: raw})
 	}
 
+	// Cross-node correlation: the same Message-ID seen elsewhere (another server, or
+	// another queue id) is surfaced as a link — never merged into this record.
+	var related []RelatedItem
+	if r.MessageID != "" {
+		for i := range s.records {
+			o := &s.records[i]
+			if o.Subsumed || o.MessageID != r.MessageID {
+				continue
+			}
+			if o.Origin == r.Origin && o.QueueID == r.QueueID {
+				continue // self
+			}
+			ots := ""
+			if !o.Timestamp.IsZero() {
+				ots = o.Timestamp.UTC().Format(time.RFC3339)
+			}
+			related = append(related, RelatedItem{
+				Origin: o.Origin, QueueID: o.QueueID,
+				Disposition: o.dispositionOrStatus(), Timestamp: ots,
+			})
+		}
+	}
+
+	direction := s.directionResolver()(r) // single source of truth for the modal's mail path
+
 	return &RecordDetail{
 		Timestamp:       ts,
+		Origin:          r.Origin,
 		QueueID:         r.QueueID,
 		From:            r.From,
 		To:              r.To,
@@ -404,6 +665,9 @@ func (s *Store) GetDetail(queueID string) *RecordDetail {
 		FilterRule:      r.FilterRule,
 		FilterID:        r.FilterID,
 		DeliveryQueueID: r.DeliveryQueueID,
+		Direction:       direction,
+		NDR:             isNDR(r),
+		Related:         related,
 		Lines:           lines,
 	}
 }
@@ -422,7 +686,7 @@ func (s *Store) PurgeOlderThan(d time.Duration) int {
 			purged++
 			continue
 		}
-		newIndex[r.QueueID] = len(kept)
+		newIndex[recKey(r.Origin, r.QueueID)] = len(kept)
 		kept = append(kept, r)
 	}
 	s.records = kept
@@ -459,6 +723,67 @@ func (s *Store) GetStatus() (bool, string, int) {
 	return s.ready, s.status, len(s.records)
 }
 
+// HasOrigins reports whether any record carries a forwarding server name, i.e.
+// the instance is showing amalgamated data and the UI should show the Server column.
+func (s *Store) HasOrigins() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.hasOrigins
+}
+
+// Suggest returns distinct values of a field (from|to|subject|client|relay),
+// most-frequent first, capped at limit — for live autocomplete on the filters.
+func (s *Store) Suggest(field string, limit int) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	counts := make(map[string]int)
+	for i := range s.records {
+		r := &s.records[i]
+		if r.Subsumed {
+			continue
+		}
+		var v string
+		switch field {
+		case "from":
+			v = r.From
+		case "to":
+			v = r.To
+		case "subject":
+			v = r.Subject
+		case "client":
+			v = r.Client
+		case "relay":
+			v = r.Relay
+		case "origin", "server":
+			v = r.Origin
+		}
+		if v != "" {
+			counts[v]++
+		}
+	}
+	items := make([]string, 0, len(counts))
+	for v := range counts {
+		items = append(items, v)
+	}
+	sort.Slice(items, func(a, b int) bool {
+		if counts[items[a]] != counts[items[b]] {
+			return counts[items[a]] > counts[items[b]]
+		}
+		return items[a] < items[b]
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items
+}
+
+// Count returns the number of records held (including subsumed legs).
+func (s *Store) Count() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.records)
+}
+
 type SearchParams struct {
 	Draw       int
 	Start      int
@@ -467,13 +792,18 @@ type SearchParams struct {
 	OrderCol   int
 	OrderDir   string
 
-	FilterFrom    string
-	FilterTo      string
-	FilterClient  string
-	FilterRelay   string
-	FilterStatus  string
-	FilterQueueID string
-	FilterTLS     string // "yes", "no", or "" (any)
+	FilterFrom      string
+	FilterTo        string
+	FilterSubject   string
+	FilterClient    string
+	FilterRelay     string
+	FilterStatus    string
+	FilterQueueID   string
+	FilterTLS       string // "yes", "no", or "" (any)
+	FilterNDR       string // "yes" to show only non-delivery reports
+	FilterServer    string // comma-separated server names to include ("" = all)
+	FilterDirection string // "inbound"|"outbound"|"internal" or "" (any)
+	Group           bool   // cluster correlated rows (same Message-ID) together
 }
 
 type SearchResult struct {
@@ -481,40 +811,73 @@ type SearchResult struct {
 	RecordsTotal    int        `json:"recordsTotal"`
 	RecordsFiltered int        `json:"recordsFiltered"`
 	Data            [][]string `json:"data"`
+	// When grouping is on, these report whether the page's first/last correlation
+	// group spills onto the adjacent page, so the UI can run the rail off the edge.
+	ContinuesAbove bool `json:"continues_above,omitempty"`
+	ContinuesBelow bool `json:"continues_below,omitempty"`
 }
 
 func (s *Store) Search(p SearchParams) SearchResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	search := strings.ToLower(p.SearchTerm)
-	hasAdvanced := p.FilterFrom != "" || p.FilterTo != "" || p.FilterClient != "" ||
-		p.FilterRelay != "" || p.FilterStatus != "" || p.FilterQueueID != "" || p.FilterTLS != ""
+	direction := s.directionResolver()
 
 	var filtered []int
 	visibleTotal := 0
-	for i, r := range s.records {
+	for i := range s.records {
+		r := &s.records[i]
 		if r.Subsumed {
 			continue // merged into another row; not its own item
 		}
 		visibleTotal++
-		if search != "" && !recordMatchesSearch(&r, search) {
+		if !recordMatches(r, &p) {
 			continue
 		}
-		if hasAdvanced && !recordMatchesAdvanced(&r, &p) {
+		if p.FilterDirection != "" && !strings.EqualFold(direction(r), p.FilterDirection) {
 			continue
 		}
 		filtered = append(filtered, i)
 	}
 
-	sort.Slice(filtered, func(a, b int) bool {
+	groupKey := func(r *Record) string {
+		if r.MessageID != "" {
+			return "m:" + r.MessageID
+		}
+		return "q:" + recKey(r.Origin, r.QueueID)
+	}
+	// Always sort by the chosen column + direction first, so column sorting works
+	// (this is the global order the client asked for). Column index 16 is the derived
+	// Direction column, which isn't a Record field — compare the resolved values.
+	sort.SliceStable(filtered, func(a, b int) bool {
 		ra, rb := &s.records[filtered[a]], &s.records[filtered[b]]
-		cmp := compareByColumn(ra, rb, p.OrderCol)
+		var cmp int
+		if p.OrderCol == 16 {
+			cmp = strings.Compare(direction(ra), direction(rb))
+		} else {
+			cmp = compareByColumn(ra, rb, p.OrderCol)
+		}
 		if p.OrderDir == "desc" {
 			return cmp > 0
 		}
 		return cmp < 0
 	})
+	if p.Group {
+		// Cluster correlated rows together WITHOUT disturbing that order: anchor each
+		// group at its best-ranked row in the sorted list, then stable-sort by that
+		// rank. Within-group order then stays identical to the global order — no
+		// reversal — and it follows whatever column/direction is active.
+		rank := make(map[string]int, len(filtered))
+		for pos, idx := range filtered {
+			k := groupKey(&s.records[idx])
+			if _, seen := rank[k]; !seen {
+				rank[k] = pos
+			}
+		}
+		sort.SliceStable(filtered, func(a, b int) bool {
+			return rank[groupKey(&s.records[filtered[a]])] < rank[groupKey(&s.records[filtered[b]])]
+		})
+	}
 
 	total := len(filtered)
 	start := p.Start
@@ -527,9 +890,45 @@ func (s *Store) Search(p SearchParams) SearchResult {
 	}
 	page := filtered[start:end]
 
+	// Flag rows whose Message-ID appears under more than one origin (cross-node).
+	midOrigins := make(map[string]map[string]struct{})
+	for i := range s.records {
+		rr := &s.records[i]
+		if rr.Subsumed || rr.MessageID == "" {
+			continue
+		}
+		set := midOrigins[rr.MessageID]
+		if set == nil {
+			set = make(map[string]struct{})
+			midOrigins[rr.MessageID] = set
+		}
+		set[rr.Origin] = struct{}{}
+	}
+
 	data := make([][]string, len(page))
 	for i, idx := range page {
-		data[i] = recordToRow(&s.records[idx])
+		row := recordToRow(&s.records[idx])
+		flag := ""
+		if mid := s.records[idx].MessageID; mid != "" && len(midOrigins[mid]) > 1 {
+			flag = "1"
+		}
+		ndr := ""
+		if isNDR(&s.records[idx]) {
+			ndr = "1"
+		}
+		data[i] = append(row, flag, ndr, groupKey(&s.records[idx]), direction(&s.records[idx]))
+	}
+
+	// When grouping, note whether the page's edge groups continue onto an adjacent
+	// page, so the UI can render the rail running off the top/bottom edge.
+	var contAbove, contBelow bool
+	if p.Group && end > start {
+		if start > 0 && groupKey(&s.records[filtered[start-1]]) == groupKey(&s.records[filtered[start]]) {
+			contAbove = true
+		}
+		if end < total && groupKey(&s.records[filtered[end]]) == groupKey(&s.records[filtered[end-1]]) {
+			contBelow = true
+		}
 	}
 
 	return SearchResult{
@@ -537,27 +936,60 @@ func (s *Store) Search(p SearchParams) SearchResult {
 		RecordsTotal:    visibleTotal,
 		RecordsFiltered: total,
 		Data:            data,
+		ContinuesAbove:  contAbove,
+		ContinuesBelow:  contBelow,
 	}
 }
 
-func recordMatchesSearch(r *Record, search string) bool {
-	fields := []string{
-		r.QueueID, r.From, r.To, r.Subject,
-		r.MessageID, r.Status, r.StatusDetail,
-		r.Relay, r.Client, r.TLS,
-		r.Disposition, r.Filter, r.FilterAction, r.SpamScore, r.FilterRule, r.FilterID,
-		r.DeliveryQueueID,
+// recordMatches reports whether a record passes the active search + advanced
+// filters. Shared by Search (table) and Stats (graphs) so both reflect the filters.
+func recordMatches(r *Record, p *SearchParams) bool {
+	if term := strings.ToLower(p.SearchTerm); term != "" && !recordMatchesSearch(r, term) {
+		return false
 	}
-	for _, f := range fields {
-		if strings.Contains(strings.ToLower(f), search) {
+	if p.FilterServer != "" && !serverSelected(r.Origin, p.FilterServer) {
+		return false
+	}
+	if p.FilterFrom != "" || p.FilterTo != "" || p.FilterSubject != "" || p.FilterClient != "" ||
+		p.FilterRelay != "" || p.FilterStatus != "" || p.FilterQueueID != "" || p.FilterTLS != "" || p.FilterNDR != "" {
+		if !recordMatchesAdvanced(r, p) {
+			return false
+		}
+	}
+	return true
+}
+
+// serverSelected reports whether origin is in the comma-separated allow-list — used
+// by the table's server multi-select. Correlation/grouping is unaffected (it keys on
+// Message-ID), so this only narrows which rows are listed.
+func serverSelected(origin, csv string) bool {
+	for _, s := range strings.Split(csv, ",") {
+		if s = strings.TrimSpace(s); s != "" && strings.EqualFold(origin, s) {
 			return true
 		}
 	}
-	ts := r.Timestamp.UTC().Format("2006-01-02 15:04:05")
-	if strings.Contains(ts, search) {
+	return false
+}
+
+// recordMatchesSearch does intuitive multi-term matching: the query is split on
+// whitespace and EVERY term must appear somewhere in the record (case-insensitive),
+// so "spam example.com" narrows rather than widens. search is already lower-cased.
+func recordMatchesSearch(r *Record, search string) bool {
+	terms := strings.Fields(search)
+	if len(terms) == 0 {
 		return true
 	}
-	return false
+	blob := strings.ToLower(strings.Join([]string{
+		r.Origin, r.QueueID, r.From, r.To, r.Subject, r.MessageID, r.Status, r.StatusDetail,
+		r.Relay, r.Client, r.TLS, r.Disposition, r.Filter, r.FilterAction, r.SpamScore,
+		r.FilterRule, r.FilterID, r.DeliveryQueueID,
+	}, " ")) + " " + r.Timestamp.UTC().Format("2006-01-02 15:04:05")
+	for _, t := range terms {
+		if !strings.Contains(blob, t) {
+			return false
+		}
+	}
+	return true
 }
 
 func recordMatchesAdvanced(r *Record, p *SearchParams) bool {
@@ -565,6 +997,9 @@ func recordMatchesAdvanced(r *Record, p *SearchParams) bool {
 		return false
 	}
 	if p.FilterTo != "" && !strings.Contains(strings.ToLower(r.To), strings.ToLower(p.FilterTo)) {
+		return false
+	}
+	if p.FilterSubject != "" && !strings.Contains(strings.ToLower(r.Subject), strings.ToLower(p.FilterSubject)) {
 		return false
 	}
 	if p.FilterClient != "" && !strings.Contains(strings.ToLower(r.Client), strings.ToLower(p.FilterClient)) {
@@ -587,11 +1022,16 @@ func recordMatchesAdvanced(r *Record, p *SearchParams) bool {
 	if p.FilterTLS == "no" && r.TLS != "" {
 		return false
 	}
+	if p.FilterNDR == "yes" && !isNDR(r) {
+		return false
+	}
 	return true
 }
 
-// compareByColumn sorts by the visible table column position:
-// 0 Time, 1 Queue ID, 2 Client, 3 From, 4 To, 5 Size, 6 Status, 7 Relay.
+// compareByColumn sorts by the data-array index the client sends
+// (DataTables columns[i][data]), which is stable regardless of column display
+// order. Indices match recordToRow: 0 Time, 1 Queue ID, 2 From, 3 To, 4 Size,
+// 5 Status, 7 Relay, 8 Client, 12 Server (Origin).
 func compareByColumn(a, b *Record, col int) int {
 	switch col {
 	case 0:
@@ -599,22 +1039,26 @@ func compareByColumn(a, b *Record, col int) int {
 	case 1:
 		return strings.Compare(a.QueueID, b.QueueID)
 	case 2:
-		return strings.Compare(strings.ToLower(a.Client), strings.ToLower(b.Client))
-	case 3:
 		return strings.Compare(strings.ToLower(a.From), strings.ToLower(b.From))
-	case 4:
+	case 3:
 		return strings.Compare(strings.ToLower(a.To), strings.ToLower(b.To))
-	case 5:
+	case 4:
 		if a.Size < b.Size {
 			return -1
 		} else if a.Size > b.Size {
 			return 1
 		}
 		return 0
-	case 6:
+	case 5:
 		return strings.Compare(a.dispositionOrStatus(), b.dispositionOrStatus())
 	case 7:
 		return strings.Compare(a.Relay, b.Relay)
+	case 8:
+		return strings.Compare(strings.ToLower(a.Client), strings.ToLower(b.Client))
+	case 10:
+		return strings.Compare(strings.ToLower(a.Subject), strings.ToLower(b.Subject))
+	case 12:
+		return strings.Compare(strings.ToLower(a.Origin), strings.ToLower(b.Origin))
 	default:
 		return 0
 	}
@@ -638,6 +1082,7 @@ func recordToRow(r *Record) []string {
 		r.MessageID,
 		r.Subject,
 		r.TLS,
+		r.Origin, // [12] forwarding server (Server column); empty in standalone
 	}
 }
 
@@ -661,6 +1106,25 @@ func tooltipDetail(r *Record) string {
 		parts = append(parts, r.FilterRule)
 	}
 	return strings.Join(parts, " · ")
+}
+
+// isNDR reports whether a record is a non-delivery report / bounce. Postfix logs a
+// null envelope sender (from=<>) for system-generated bounce/DSN messages, which is
+// why their From/Subject columns are typically empty.
+func isNDR(r *Record) bool {
+	// A non-delivery report is a delivery itself (a bounce/DSN), recognised by its
+	// null return-path (from=<>). Exclude content-scanner / reject verdicts: spam and
+	// junk routinely use a null sender but are NOT non-delivery reports.
+	switch r.dispositionOrStatus() {
+	case "spam", "virus", "blocked", "rejected", "reject":
+		return false
+	}
+	for _, l := range r.RawLines {
+		if strings.Contains(l, "from=<>") {
+			return true
+		}
+	}
+	return false
 }
 
 func formatSize(bytes int64) string {
@@ -694,31 +1158,63 @@ type StatsResult struct {
 	Rejected      int          `json:"rejected"`
 	Bounced       int          `json:"bounced"`
 	Deferred      int          `json:"deferred"`
+	NDR           int          `json:"ndr"`
 	Other         int          `json:"other"`
+	Inbound       int          `json:"inbound"`
+	Outbound      int          `json:"outbound"`
+	Internal      int          `json:"internal"`
+	Relayed       int          `json:"relayed"`
 	TopSenders    []CountItem  `json:"top_senders"`
 	TopRecipients []CountItem  `json:"top_recipients"`
 	Hourly        []HourlyItem `json:"hourly"`
+	Earliest      string       `json:"earliest"`       // RFC3339 of the oldest message (for the "N days" header)
+	RetentionDays int          `json:"retention_days"` // configured RETENTION_DAYS, 0 = disabled
 	Ready         bool         `json:"ready"`
 	Status        string       `json:"status"`
 }
 
-func (s *Store) Stats() StatsResult {
+func (s *Store) Stats(p SearchParams) StatsResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	result := StatsResult{
-		Ready:  s.ready,
-		Status: s.status,
+		Ready:         s.ready,
+		Status:        s.status,
+		RetentionDays: s.retentionDays,
 	}
 
 	senders := make(map[string]int)
 	recipients := make(map[string]int)
 	hourly := make(map[string]int)
+	direction := s.directionResolver()
+	var earliest time.Time
 
 	for i := range s.records {
 		r := &s.records[i]
 		if r.Subsumed {
 			continue // merged into another row
+		}
+		if !recordMatches(r, &p) {
+			continue // graphs reflect the active filters
+		}
+		// Direction tallies (for the direction cards) count every match within the
+		// non-direction filters — independent of the direction filter, so all four
+		// counts stay visible while one is selected.
+		switch direction(r) {
+		case "inbound":
+			result.Inbound++
+		case "outbound":
+			result.Outbound++
+		case "internal":
+			result.Internal++
+		case "relayed":
+			result.Relayed++
+		}
+		if p.FilterDirection != "" && !strings.EqualFold(direction(r), p.FilterDirection) {
+			continue
+		}
+		if !r.Timestamp.IsZero() && (earliest.IsZero() || r.Timestamp.Before(earliest)) {
+			earliest = r.Timestamp
 		}
 		result.Total++
 		// Categorize by the effective disposition so quarantined/blocked mail is
@@ -741,6 +1237,9 @@ func (s *Store) Stats() StatsResult {
 		default:
 			result.Other++
 		}
+		if isNDR(r) {
+			result.NDR++
+		}
 		if r.From != "" {
 			senders[r.From]++
 		}
@@ -755,6 +1254,9 @@ func (s *Store) Stats() StatsResult {
 	result.TopSenders = topN(senders, 10)
 	result.TopRecipients = topN(recipients, 10)
 	result.Hourly = sortedHourly(hourly)
+	if !earliest.IsZero() {
+		result.Earliest = earliest.UTC().Format(time.RFC3339)
+	}
 	return result
 }
 
@@ -764,7 +1266,10 @@ func topN(counts map[string]int, n int) []CountItem {
 		items = append(items, CountItem{Name: name, Count: count})
 	}
 	sort.Slice(items, func(i, j int) bool {
-		return items[i].Count > items[j].Count
+		if items[i].Count != items[j].Count {
+			return items[i].Count > items[j].Count
+		}
+		return items[i].Name < items[j].Name // stable tiebreak so equal counts don't reshuffle
 	})
 	if len(items) > n {
 		items = items[:n]
