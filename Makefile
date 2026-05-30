@@ -43,7 +43,7 @@ test: ## Run the race-enabled test suite.
 
 .PHONY: vuln
 vuln: ## Run the official Go vulnerability scanner.
-	$(GO) run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.3.0 ./...
 
 .PHONY: build
 build: ## Build the plv binary (inject VERSION=... to stamp it).
