@@ -7,8 +7,11 @@
 # `publish_results: true` the score also feeds the public Scorecard badge in the
 # README.
 #
-# Runs weekly and whenever a branch-protection rule changes. No secrets — uses
-# GITHUB_TOKEN + OIDC.
+# Runs weekly and whenever a branch-protection rule changes. Uses GITHUB_TOKEN +
+# OIDC, plus an OPTIONAL `SCORECARD_TOKEN` secret: a fine-grained PAT with
+# Administration:read so the Branch-Protection check can read the rules (the
+# default GITHUB_TOKEN cannot read classic branch protection). When the secret is
+# absent the workflow falls back to GITHUB_TOKEN and every other check still runs.
 # =============================================================================
 
 name: Scorecard supply-chain
@@ -45,6 +48,9 @@ jobs:
         with:
           results_file: results.sarif
           results_format: sarif
+          # Prefer the admin-read PAT (lets the Branch-Protection check read the
+          # rules); fall back to GITHUB_TOKEN when the secret isn't set.
+          repo_token: ${{ secrets.SCORECARD_TOKEN || github.token }}
           publish_results: true
 
       - name: Upload artifact
