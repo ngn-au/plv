@@ -1,0 +1,152 @@
+# =============================================================================
+# Sign release — supply-chain provenance for published releases.
+#
+# Triggered AFTER the "Publish image" workflow finishes pushing the multi-arch
+# image to GHCR for a vX.Y.Z tag — never before. Listening on `workflow_run`
+# guarantees the image is on the registry when this job starts (signing it
+# inline in the publish job would race the manifest push).
+#
+# It:
+#   1. cosign-signs the published multi-arch image (keyless / Sigstore) — a
+#      verifiable signature attached to the image in GHCR.
+#   2. generates an SPDX SBOM of the image,
+#   3. writes a checksums file over the SBOM, the image digest, and the release
+#      binaries, and cosign sign-blobs it into a Sigstore bundle,
+#   4. attests SLSA build provenance over those artifacts (multiple.intoto.jsonl),
+#   5. uploads the SBOM + checksums + signature bundle + provenance to the release.
+#
+# The signed assets (the *.sigstore.json bundle + multiple.intoto.jsonl) are what
+# OpenSSF Scorecard's Signed-Releases check looks for; the image signature is the
+# real supply-chain win. Verify the image:
+#   cosign verify ghcr.io/ngn-au/plv:<version> \
+#     --certificate-identity-regexp '^https://github.com/ngn-au/' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+# =============================================================================
+
+name: Sign release
+
+on:
+  workflow_run:
+    workflows: ["Publish image"]
+    types: [completed]
+
+# Least privilege at the top level; the sign job elevates as it needs to.
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Fire only when "Publish image" succeeded on a vX.Y.Z tag push. workflow_run
+    # delivers every completion (PRs, branches, tags), so filter tightly: success,
+    # original event was push, and head_branch (the tag name for tag pushes) is v*.
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+    permissions:
+      contents: write # upload release assets
+      packages: write # cosign writes the image signature to GHCR
+      id-token: write # cosign keyless (Fulcio OIDC) + provenance attestation
+      attestations: write # actions/attest-build-provenance writes the attestation
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+      TAG: ${{ github.event.workflow_run.head_branch }}
+      # Without actions/checkout, gh has no git remote to infer the repo from.
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # No actions/checkout: nothing here needs the source tree (cosign and the
+      # SBOM action operate on the image; gh works on files we generate in-place),
+      # and checking out a workflow_run's head_sha trips Scorecard Dangerous-Workflow.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Log in to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image digest for the release tag
+        id: digest
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"                       # v1.0.1 -> 1.0.1 (the published image tag)
+          digest="$(docker buildx imagetools inspect "${IMAGE}:${version}" --format '{{ .Manifest.Digest }}')"
+          echo "ref=${IMAGE}@${digest}" >> "$GITHUB_OUTPUT"
+          echo "Resolved ${IMAGE}:${version} -> ${digest}"
+
+      - name: Sign the image (keyless)
+        run: cosign sign --yes "${{ steps.digest.outputs.ref }}"
+
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ steps.digest.outputs.ref }}
+          format: spdx-json
+          output-file: plv.sbom.spdx.json
+
+      - name: Wait for the release + its binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The same tag push runs "Release binaries" in parallel; poll until the
+          # release exists and all four binaries are attached (≤ 5 min) so the
+          # checksums + provenance cover the downloads too.
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              count="$(gh release view "$TAG" --json assets \
+                --jq '[.assets[].name | select(startswith("plv-"))] | length')"
+              if [ "${count:-0}" -ge 4 ]; then
+                echo "Release $TAG ready with $count binaries."
+                exit 0
+              fi
+              echo "Release $TAG present, $count/4 binaries so far... ($i/30)"
+            else
+              echo "Waiting for release $TAG... ($i/30)"
+            fi
+            sleep 10
+          done
+          echo "Release $TAG / its binaries did not appear within 5 min — failing." >&2
+          exit 1
+
+      - name: Download the release binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download "$TAG" --pattern 'plv-v*' --dir dist
+
+      - name: Build + sign checksums
+        run: |
+          set -euo pipefail
+          echo "${{ steps.digest.outputs.ref }}" > image-digest.txt
+          sha256sum plv.sbom.spdx.json image-digest.txt dist/plv-v* > checksums.txt
+          cosign sign-blob --yes --bundle checksums.txt.sigstore.json checksums.txt
+
+      # SLSA build provenance over the release artifacts — records HOW they were
+      # built (source repo, commit, workflow). Uploaded as `multiple.intoto.jsonl`
+      # (a name Scorecard recognizes) and pushed to GitHub's attestation store.
+      - name: Attest build provenance for the release artifacts
+        id: attest
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            plv.sbom.spdx.json
+            checksums.txt
+
+      - name: Stage provenance as a release asset
+        run: cp "${{ steps.attest.outputs.bundle-path }}" multiple.intoto.jsonl
+
+      - name: Upload signed assets to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$TAG" \
+            plv.sbom.spdx.json \
+            image-digest.txt \
+            checksums.txt \
+            checksums.txt.sigstore.json \
+            multiple.intoto.jsonl \
+            --clobber

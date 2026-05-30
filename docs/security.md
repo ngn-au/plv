@@ -22,8 +22,9 @@ themselves. This is the production-hardening checklist; to report a vulnerabilit
 - [ ] **Set a retention policy.** With persistence enabled, set `RETENTION_DAYS` so you don't hold
       mail metadata longer than you need to. Memory-only mode is naturally bounded by the logs on
       disk.
-- [ ] **Pin the image version.** Deploy `ghcr.io/ngn-au/plv:1.0.0`, not `:latest`, and upgrade
-      deliberately.
+- [ ] **Pin the image version.** Deploy `ghcr.io/ngn-au/plv:1.0.1`, not `:latest`, and upgrade
+      deliberately. Each release image is cosign-signed — verify it before you trust it (see
+      [Verifying a release](#verifying-a-release) below).
 
 ## What PLV does by design
 
@@ -39,6 +40,24 @@ themselves. This is the production-hardening checklist; to report a vulnerabilit
 - **Tiny dependency surface.** Two third-party modules only (`github.com/lib/pq`,
   `golang.org/x/crypto`), which keeps the supply-chain surface small. Dependabot, `govulncheck`,
   CodeQL, dependency review, and OpenSSF Scorecard run in CI.
+
+## Verifying a release
+
+Every release image is signed with [cosign](https://docs.sigstore.dev/) (keyless / Sigstore — no
+long-lived key, the signature is tied to the GitHub Actions workflow that built it). Verify the image
+you're about to run:
+
+```bash
+cosign verify ghcr.io/ngn-au/plv:1.0.1 \
+  --certificate-identity-regexp '^https://github.com/ngn-au/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Each GitHub release also carries an SPDX **SBOM** (`plv.sbom.spdx.json`), a Sigstore-signed
+**`checksums.txt`** (`checksums.txt.sigstore.json`) covering the SBOM, the image digest, and the
+binaries, and **SLSA build provenance** (`multiple.intoto.jsonl`). Verify the checksums bundle with
+`cosign verify-blob --bundle checksums.txt.sigstore.json checksums.txt` (with the same identity flags
+as above), then check a downloaded binary against `checksums.txt`.
 
 ## What's not in scope
 

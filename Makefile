@@ -7,8 +7,13 @@
 
 GO       ?= go
 ACT      ?= act
-VERSION  ?= dev
-LDFLAGS  := -s -w -X main.version=$(VERSION)
+# Build provenance for the version chip (see buildmeta.go). A plain `make build` is a
+# "dev" build (chip shows 1.0.1-dev). To simulate a commit build, pass the short SHA:
+#   make build GIT_SHA=$(git rev-parse --short=7 HEAD)   → 1.0.1+<sha>
+# RELEASE=true marks a release build (1.0.1) — CI sets this on a vX.Y.Z tag.
+GIT_SHA  ?=
+RELEASE  ?=
+LDFLAGS  := -s -w -X main.gitSha=$(GIT_SHA) -X main.releaseBuild=$(RELEASE)
 
 .DEFAULT_GOAL := help
 

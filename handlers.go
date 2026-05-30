@@ -85,6 +85,7 @@ func NewServer(store *Store, addr string, auth *AuthConfig) *http.Server {
 	mux.HandleFunc("/api/suggest", handleSuggest(store))
 	mux.HandleFunc("/api/status", handleStatus(store))
 	mux.HandleFunc("/api/serverconf", handleServerConf(store))
+	mux.HandleFunc("/api/version", handleVersion())
 
 	var handler http.Handler = mux
 	if auth != nil && auth.Enabled {
@@ -327,6 +328,21 @@ func handleServerConf(store *Store) http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"configured": len(confs) > 0,
 			"servers":    confs,
+		})
+	}
+}
+
+// handleVersion exposes the build identity for the header version chip: the display
+// label plus links to the source (release/commit/main) and matching docs. See buildmeta.go.
+func handleVersion() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"label":      versionLabel(),
+			"kind":       buildKind(),
+			"source_url": sourceURL(),
+			"docs_url":   docsURL(),
+			"title":      sourceTitle(),
 		})
 	}
 }

@@ -7,8 +7,8 @@
 [![License: MIT](https://img.shields.io/github/license/ngn-au/plv)](./LICENSE)
 
 [![Container: GHCR](https://img.shields.io/badge/ghcr.io-plv-2496ED?logo=docker&logoColor=white)](https://github.com/ngn-au/plv/pkgs/container/plv)
-[![GHCR version](https://ghcr-badge.egpl.dev/ngn-au/plv/latest_tag?ignore=latest,edge&label=ghcr.io&color=%232ea44f)](https://github.com/ngn-au/plv/pkgs/container/plv)
-[![GHCR image size](https://ghcr-badge.egpl.dev/ngn-au/plv/size?tag=latest&label=image%20size&color=%232ea44f)](https://github.com/ngn-au/plv/pkgs/container/plv)
+[![GHCR version](https://ghcr-badge.ngn.au/ngn-au/plv/latest_tag?ignore=latest,edge&label=ghcr.io&color=%232ea44f)](https://github.com/ngn-au/plv/pkgs/container/plv)
+[![GHCR image size](https://ghcr-badge.ngn.au/ngn-au/plv/size?tag=latest&label=image%20size&color=%232ea44f)](https://github.com/ngn-au/plv/pkgs/container/plv)
 [![GHCR pulls](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fghcr-badge.elias.eu.org%2Fapi%2Fngn-au%2Fplv&query=%24.downloadCount&label=ghcr%20pulls&logo=docker&logoColor=white&color=2496ED)](https://github.com/ngn-au/plv/pkgs/container/plv)
 
 [![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
@@ -102,7 +102,7 @@ docker compose up -d
 #   → http://localhost:8080
 ```
 
-Prefer a pinned version? Use `ghcr.io/ngn-au/plv:1.0.0` (or `:1.0`) instead of `:latest`. Multi-arch
+Prefer a pinned version? Use `ghcr.io/ngn-au/plv:1.0.1` (or `:1.0`) instead of `:latest`. Multi-arch
 images (`amd64` / `arm64`) are published on every release.
 
 ### Building from source

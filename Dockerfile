@@ -1,6 +1,6 @@
 # Build on the native host arch and cross-compile to the target arch (no QEMU
 # for the Go build). BUILDPLATFORM/TARGETOS/TARGETARCH are provided by buildx.
-FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine@sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d AS builder
 WORKDIR /app
 
 # download dependencies (cached layer)
@@ -12,14 +12,18 @@ COPY *.go ./
 COPY web ./web
 
 # cross-compile a static binary for the target platform.
-# VERSION is injected into the binary via -ldflags (defaults to "dev").
+# Build provenance for the version chip (see buildmeta.go) is injected via -ldflags:
+#   GIT_SHA — short commit SHA → a "commit" build (chip shows 1.0.1+abc1234)
+#   RELEASE — "true" on a vX.Y.Z tag build → a "release" build (chip shows 1.0.1)
+# Both empty (a plain `docker build` with no build-args) → a "dev" build (1.0.1-dev).
 ARG TARGETOS TARGETARCH
-ARG VERSION=dev
+ARG GIT_SHA=""
+ARG RELEASE=""
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -ldflags="-s -w -X main.version=${VERSION}" -o plv .
+    go build -ldflags="-s -w -X main.gitSha=${GIT_SHA} -X main.releaseBuild=${RELEASE}" -o plv .
 
 # create a new stage from alpine
-FROM alpine:3.23
+FROM alpine:3.23@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
 RUN apk add --no-cache tzdata
 
 # OCI image metadata (the publish workflow adds source/revision labels too).

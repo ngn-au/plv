@@ -618,17 +618,35 @@ func (s *Store) GetDetail(origin, queueID string) *RecordDetail {
 		lines = append(lines, LogLine{Timestamp: fmtTs, Raw: raw})
 	}
 
-	// Cross-node correlation: the same Message-ID seen elsewhere (another server, or
-	// another queue id) is surfaced as a link — never merged into this record.
+	// Cross-node correlation AND direction in a single pass. Both are keyed on Message-ID:
+	// the related links are this message's other legs, and the direction aggregates those
+	// same legs' signals. Done inline here rather than via directionResolver() — which
+	// rebuilds the global six-map signal index over EVERY record on each call — so a detail
+	// open stays O(this message's legs) for the costly IP/CIDR predicates instead of
+	// O(all records). GetDetail runs on every modal open (and once per related leg), so the
+	// old per-call full scan was the bulk of the open latency.
+	pc := s.confFor(r.Origin)
+	in, out, local, relay := legReceivedPublicUnauth(r, pc), legSendsPublic(r, pc), deliversLocal(r), isRelayLeg(r, pc)
+	fromLocal, toLocal := pc.isLocalDomain(r.From), pc.isLocalDomain(r.To)
 	var related []RelatedItem
 	if r.MessageID != "" {
+		// With a Message-ID the direction aggregates across the message's non-subsumed legs
+		// (matching directionResolver), so reset and OR every leg — including this one — in.
+		in, out, local, relay, fromLocal, toLocal = false, false, false, false, false, false
 		for i := range s.records {
 			o := &s.records[i]
 			if o.Subsumed || o.MessageID != r.MessageID {
 				continue
 			}
+			opc := s.confFor(o.Origin)
+			in = in || legReceivedPublicUnauth(o, opc)
+			out = out || legSendsPublic(o, opc)
+			local = local || deliversLocal(o)
+			relay = relay || isRelayLeg(o, opc)
+			fromLocal = fromLocal || opc.isLocalDomain(o.From)
+			toLocal = toLocal || opc.isLocalDomain(o.To)
 			if o.Origin == r.Origin && o.QueueID == r.QueueID {
-				continue // self
+				continue // self: aggregated above, but it isn't a "related" link
 			}
 			ots := ""
 			if !o.Timestamp.IsZero() {
@@ -641,7 +659,7 @@ func (s *Store) GetDetail(origin, queueID string) *RecordDetail {
 		}
 	}
 
-	direction := s.directionResolver()(r) // single source of truth for the modal's mail path
+	direction := classifyDirection(in, out, local, relay, fromLocal, toLocal) // mail-path source of truth
 
 	return &RecordDetail{
 		Timestamp:       ts,

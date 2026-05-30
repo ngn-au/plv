@@ -16,14 +16,16 @@ fast() {
 codeql() {
   # Intel-only macOS bundle + Apple Silicon = no native run; use Docker (linux/amd64).
   local bundle=/tmp/codeql-linux
-  if [ ! -x "$bundle/codeql/codeql" ]; then
+  # The codeql-bundle tarball extracts to a top-level `codeql/` dir holding the `codeql`
+  # binary; we rename that dir to $bundle, so the binary lands directly at $bundle/codeql.
+  if [ ! -x "$bundle/codeql" ]; then
     curl -sL https://github.com/github/codeql-action/releases/latest/download/codeql-bundle-linux64.tar.gz \
       | tar xz -C "$(dirname "$bundle")" && mv "$(dirname "$bundle")/codeql" "$bundle" 2>/dev/null || true
   fi
   docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src -v "$bundle":/cq \
     golang:1.26.3 bash -c '
-      /cq/codeql/codeql database create /tmp/db --language=go --source-root=/src --overwrite >/tmp/cq.log 2>&1 || { tail -20 /tmp/cq.log; exit 1; }
-      /cq/codeql/codeql database analyze /tmp/db codeql/go-queries:codeql-suites/go-security-and-quality.qls \
+      /cq/codeql database create /tmp/db --language=go --source-root=/src --overwrite >/tmp/cq.log 2>&1 || { tail -20 /tmp/cq.log; exit 1; }
+      /cq/codeql database analyze /tmp/db codeql/go-queries:codeql-suites/go-security-and-quality.qls \
         --format=sarif-latest --output=/src/codeql-go.sarif --threads=0 >>/tmp/cq.log 2>&1 || { tail -20 /tmp/cq.log; exit 1; }'
   python3 - <<'PY'
 import json
