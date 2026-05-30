@@ -221,3 +221,44 @@ func TestDirectionWithPostfixConf(t *testing.T) {
 		t.Errorf("trusted PBX send: got %q, want outbound", got)
 	}
 }
+
+// TestGetDetailDirectionMatchesResolver guards the GetDetail optimisation: it computes a
+// record's mail-path direction inline (a single Message-ID-scoped pass) instead of calling
+// directionResolver (which rebuilds the global signal index over every record). The two must
+// stay identical for every leg of a multi-server, multi-leg message.
+func TestGetDetailDirectionMatchesResolver(t *testing.T) {
+	store := NewStore(nil)
+	// One message (shared Message-ID) crossing two servers: an inbound gateway leg that
+	// received from the public internet, and a mailbox-host leg that delivered locally.
+	store.records = []Record{
+		{Origin: "gateway", QueueID: "GATE000001", MessageID: "<m1@example.net>",
+			Client: "mx.sender.example[198.51.100.86]", Relay: "127.0.0.1[127.0.0.1]:10024"},
+		{Origin: "mailbox", QueueID: "MBOX000001", MessageID: "<m1@example.net>",
+			Client: "gateway[192.168.8.5]", Relay: "mailbox[private/dovecot-lmtp]"},
+		// An unrelated single-leg outbound message, to ensure the scan stays scoped.
+		{Origin: "mailbox", QueueID: "MBOX000002", MessageID: "<m2@example.net>",
+			Client: "unknown[192.168.8.25]", Relay: "mx.example.com[203.0.113.1]:25",
+			RawLines: []string{"sasl_username=user@example.com"}},
+	}
+	store.byQueueID = map[string]int{
+		recKey("gateway", "GATE000001"): 0,
+		recKey("mailbox", "MBOX000001"): 1,
+		recKey("mailbox", "MBOX000002"): 2,
+	}
+
+	resolver := store.directionResolver()
+	for i := range store.records {
+		r := &store.records[i]
+		d := store.GetDetail(r.Origin, r.QueueID)
+		if d == nil {
+			t.Fatalf("GetDetail(%s,%s) returned nil", r.Origin, r.QueueID)
+		}
+		if want := resolver(r); d.Direction != want {
+			t.Errorf("leg %s/%s: GetDetail direction %q != resolver %q", r.Origin, r.QueueID, d.Direction, want)
+		}
+	}
+	// And the shared message reads "inbound" (public-in on one leg, local delivery on the other).
+	if d := store.GetDetail("gateway", "GATE000001"); d.Direction != "inbound" {
+		t.Errorf("shared-message direction: got %q, want inbound", d.Direction)
+	}
+}

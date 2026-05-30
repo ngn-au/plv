@@ -20,10 +20,11 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// version is the build version, injected at build time via
-// -ldflags "-X main.version=vX.Y.Z". It defaults to "dev" for local builds.
-// In distributed mode the forwarder and receiver must run the exact same version.
-var version = "dev"
+// version is the build identity, derived from the build metadata (see buildmeta.go):
+// "v1.0.1" for a release, "v1.0.1+abc1234" for a commit build, "v1.0.1-dev" locally.
+// It is what `plv version` prints and what distributed mode locks on — a forwarder and
+// receiver must run the exact same version.
+var version = "v" + versionLabel()
 
 func main() {
 	if len(os.Args) > 1 {

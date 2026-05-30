@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-05-31
+
 ### Added
 
 - **Distributed mode (mTLS forwarders → receiver)** — run PLV headless on each mail server as a
@@ -39,8 +41,32 @@ All notable changes to this project are documented here. The format is based on
   (rolls hourly buckets up to days over long spans).
 - **`AUTH_DISABLE`** — explicitly run with authentication off (otherwise a receiver auto-generates a
   login and prints it once on first start).
+- **Build version chip in the header** — shows the running version, linking to the matching source on
+  GitHub (the release page, the exact commit, or `main`) and a docs shortcut. A release build reads
+  `v1.0.1`, an edge/commit build `v1.0.1+abc1234`, and a local build `v1.0.1-dev` — the link only
+  resolves to a commit when one was stamped in, so it never points at a 404. (`appVersion` in
+  `buildmeta.go` is the single source of truth for the semver.)
+- **Signed releases** — the published multi-arch image is cosign-signed (keyless / Sigstore); each
+  release also carries an SPDX SBOM, a Sigstore-signed `checksums.txt`, and SLSA build provenance
+  (`multiple.intoto.jsonl`) over the image and the binaries. Verify the image with
+  `cosign verify ghcr.io/ngn-au/plv:<version> --certificate-identity-regexp '^https://github.com/ngn-au/' --certificate-oidc-issuer https://token.actions.githubusercontent.com`.
+- **Fuzz target** for the pure log parser (`go test -fuzz=FuzzParseLines`) — `parseLines` is the
+  untrusted-input boundary, so it's fuzzed to stay total (never panics on a malformed line).
+
+### Performance
+
+- **The detail modal opens instantly.** Clicking a message now blurs the page and shows a loading
+  state immediately, rather than waiting on the fetch; the content swaps in when ready (cached
+  re-opens are instant). The `/api/detail` endpoint is also dramatically faster on large stores — it
+  no longer rebuilds the global mail-direction index (a full-store rescan that IP-parses every
+  record) on every open and once per related leg, computing a message's direction in a single
+  Message-ID-scoped pass. On a 100k-record store a detail open dropped from seconds to ~1 ms.
 
 ### Changed
+
+- **Supply-chain hardening** — the Docker base images are pinned by digest, and every GitHub Actions
+  workflow declares a least-privilege top-level `permissions:` block (write scopes only on the jobs
+  that need them).
 
 - **rspamd `add header` / `rewrite subject` are now `delivered`, not `spam`** — those actions only
   *tag* a message that is still delivered; only `reject` blocks it. The spam score still rides along
@@ -115,5 +141,6 @@ First public release.
 - CodeQL (SAST), OpenSSF Scorecard, and dependency review run in CI; Dependabot keeps Go modules,
   GitHub Actions, and the base image up to date.
 
-[Unreleased]: https://github.com/ngn-au/plv/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/ngn-au/plv/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/ngn-au/plv/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/ngn-au/plv/releases/tag/v1.0.0

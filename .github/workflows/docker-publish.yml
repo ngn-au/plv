@@ -36,6 +36,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege at the top level; the publish job elevates to packages: write.
+permissions:
+  contents: read
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }} # ghcr.io/ngn-au/plv
@@ -53,15 +57,17 @@ jobs:
           # Build the dispatched tag's source when given, else the trigger ref.
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - name: Resolve build version
+      # Build provenance for the version chip (see buildmeta.go): always stamp the short
+      # SHA; mark RELEASE=true only for a vX.Y.Z tag build (or a dispatch against one), so
+      # the chip reads "1.0.1" for releases and "1.0.1+<sha>" for edge/main images.
+      - name: Resolve build provenance
         id: ver
         run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            echo "version=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.ref_type }}" = "tag" ]; then
-            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+          if [ -n "${{ github.event.inputs.tag }}" ] || [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
           else
-            echo "version=edge-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+            echo "release=" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
@@ -100,7 +106,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ steps.ver.outputs.version }}
+            GIT_SHA=${{ steps.ver.outputs.sha }}
+            RELEASE=${{ steps.ver.outputs.release }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           # Keep the published manifest to just the two arches (no extra

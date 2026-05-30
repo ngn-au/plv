@@ -116,12 +116,18 @@ pipeline.
 
 Releases are tag-driven. Maintainers:
 
-1. Move the `## [Unreleased]` notes in [`CHANGELOG.md`](../CHANGELOG.md) under a new `## [X.Y.Z]`
+1. Bump `appVersion` in [`buildmeta.go`](../buildmeta.go) to the new `X.Y.Z` — it is the single
+   source of truth for the version the UI chip and `plv version` report, and the tag must be
+   `v` + `appVersion`.
+2. Move the `## [Unreleased]` notes in [`CHANGELOG.md`](../CHANGELOG.md) under a new `## [X.Y.Z]`
    heading with the date, and update the compare links.
-2. Push a `vX.Y.Z` tag. That triggers:
+3. Push a `vX.Y.Z` tag. That triggers:
    - **release.yml** — cross-compiled binaries (linux/macOS × amd64/arm64) + `SHA256SUMS` attached to
-     the GitHub release.
+     the GitHub release (built with `-X main.releaseBuild=true`).
    - **docker-publish.yml** — a multi-arch image pushed to `ghcr.io/ngn-au/plv` tagged `X.Y.Z`, `X.Y`,
      and `latest`.
+   - **release-sign.yml** — after the image is published, cosign-signs it and attaches the SBOM,
+     signed `checksums.txt`, and SLSA provenance to the release. See
+     [Verifying a release](security.md#verifying-a-release).
 
-`main` pushes publish the `edge` image tag.
+`main` pushes publish the `edge` image tag (a `commit` build — the version chip shows `X.Y.Z+<sha>`).
