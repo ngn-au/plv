@@ -4,6 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Postfix Log Viewer</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="mask-icon" href="/favicon.svg" color="#4263eb">
+  <meta name="theme-color" content="#4263eb">
+  <link rel="apple-touch-icon" href="/favicon.svg">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css">
   <link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css">
   <script>
@@ -230,6 +234,24 @@
     #detail-modal .modal-body { scrollbar-gutter: stable; }
     #detail-modal .modal-header { padding: 1.1rem 1.35rem; align-items: flex-start; gap: 1rem; }
     #detail-modal .detail-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; }
+    /* Correlated-queue-id switcher: one chip per fan-out delivery, click to focus. */
+    .detail-switcher { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-top: .6rem; }
+    .detail-switcher .sw-cap { font-size: .6875rem; text-transform: uppercase; letter-spacing: .04em; color: var(--tblr-secondary-color); font-weight: 600; margin-right: .15rem; }
+    .detail-switcher .sw-chip {
+      display: inline-flex; align-items: center; gap: .4rem; max-width: 100%;
+      font-size: .75rem; line-height: 1.2; padding: .26rem .55rem; border-radius: 7px;
+      border: 1px solid var(--tblr-border-color); background: var(--tblr-bg-surface-secondary, rgba(130,130,150,.08));
+      color: var(--tblr-body-color); cursor: pointer; transition: border-color .12s, background .12s;
+    }
+    .detail-switcher .sw-chip:hover { border-color: var(--tblr-primary, #066fd1); }
+    .detail-switcher .sw-chip.active {
+      border-color: var(--tblr-primary, #066fd1);
+      background: color-mix(in srgb, var(--tblr-primary, #066fd1) 14%, transparent); font-weight: 600;
+    }
+    .detail-switcher .sw-qid { font-family: var(--tblr-font-monospace); }
+    .detail-switcher .sw-to { color: var(--tblr-secondary-color); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .detail-switcher .sw-chip.active .sw-to { color: var(--tblr-body-color); }
+    .detail-switcher .sw-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
     #detail-modal .detail-qid { font-family: var(--tblr-font-monospace); font-size: 1.05rem; font-weight: 600; background: var(--tblr-bg-surface-secondary, rgba(130,130,150,.12)); padding: .2rem .55rem; border-radius: 7px; word-break: break-all; }
     #detail-modal #detail-subtitle { margin-top: .4rem; }
     .detail-field .detail-label { font-size: .6875rem; text-transform: uppercase; letter-spacing: .04em; color: var(--tblr-secondary-color); font-weight: 600; margin-bottom: .15rem; }
@@ -783,9 +805,12 @@
     <div class="modal-dialog modal-xl modal-dialog-scrollable">
       <div class="modal-content">
         <div class="modal-header">
-          <div>
+          <div class="flex-fill">
             <h5 class="modal-title" id="detail-title"></h5>
             <div class="text-secondary small" id="detail-subtitle"></div>
+            <!-- Correlated queue ids (same message fanned out to several recipients): one
+                 chip per delivery, click to switch the modal's focus. Hidden when alone. -->
+            <div class="detail-switcher d-none" id="detail-switcher"></div>
           </div>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
@@ -1771,7 +1796,7 @@
         var resultBadge = rDisp ? '<span class="mp-result"><span class="badge ' + rsc.badge + '">' + esc(rDisp) + '</span></span>' : '';
         // External recipient: show the TO address; the destination MX host/IP is on hover.
         parts.push('<div class="mp-node mp-ext"><div class="mp-icon" title="' + esc(sendLeg.relay || '') + '">' + GLOBE_SVG + '</div>' +
-          '<div class="mp-label">' + esc(last.to || primary.to || 'External recipient') + '</div>' +
+          '<div class="mp-label">' + esc(primary.to || last.to || 'External recipient') + '</div>' +
           '<div class="mp-sub">' + (dir === 'relayed' ? 'relayed externally' : 'handed off — delivery outside our control') + '</div>' + resultBadge + '</div>');
       } else {
         // Final endpoint — GATED. Only show a mailbox when a leg ACTUALLY delivered
@@ -1784,7 +1809,7 @@
         var onwardLeg = legs.filter(function(l) { return mpIsPublic(mpExtractIP(l.relay)) && !mpDeliversLocal(l); }).slice(-1)[0];
         if (deliveredLocal) {
           parts.push(mpConn(false, false));
-          parts.push(mpIconNode(MAILBOX_SVG, last.to || primary.to || 'Mailbox', 'delivered to mailbox', 'mp-mbox', deliveredLocal.relay));
+          parts.push(mpIconNode(MAILBOX_SVG, primary.to || last.to || 'Mailbox', 'delivered to mailbox', 'mp-mbox', deliveredLocal.relay));
         } else if (legs.some(function(l) { return (l.filter_action || '') === 'noqueue-reject'; })) {
           // NOQUEUE reject: refused at RCPT, never accepted or sent onward. The path
           // STOPS at the server (its node already reads "rejected") — no external
@@ -1794,7 +1819,7 @@
           // still show the intended recipient (To) where present, with the failure as
           // the sub-label and a red marker.
           parts.push(mpConn(false, false));
-          var stopTo = last.to || primary.to;
+          var stopTo = primary.to || last.to;
           parts.push(mpIconNode(STOP_SVG, stopTo || finalDisp, stopTo ? ('not delivered — ' + finalDisp) : 'not delivered', 'mp-stop'));
         } else if (onwardLeg) {
           // Inbound scanned then relayed onward to the recipient's mail server. Show the
@@ -1804,7 +1829,7 @@
           var osc = statusColors[(oDisp || '').toLowerCase()] || statusColors.other;
           var oBadge = '<span class="mp-result"><span class="badge ' + osc.badge + '">' + esc(oDisp) + '</span></span>';
           parts.push('<div class="mp-node mp-mbox"><div class="mp-icon" title="' + esc(onwardLeg.relay || '') + '">' + MAILBOX_SVG + '</div>' +
-            '<div class="mp-label">' + esc(last.to || primary.to || 'Recipient') + '</div>' +
+            '<div class="mp-label">' + esc(primary.to || last.to || 'Recipient') + '</div>' +
             '<div class="mp-sub">delivered to mail server</div>' + oBadge + '</div>');
         }
         // else: received/queued with no recorded delivery → path simply ends at the
@@ -1818,10 +1843,51 @@
       host.classList.remove('d-none');
     }
 
+    // Correlated-queue-id switcher: a chip per delivery in the group (the focused one plus
+    // its same-Message-ID siblings — a fan-out to several recipients is a separate delivery
+    // per queue id). Each chip carries that delivery's own recipient + status; clicking it
+    // re-focuses the modal on that queue id. Hidden when there's nothing to switch between.
+    function renderSwitcher() {
+      var host = document.getElementById('detail-switcher');
+      if (!host) return;
+      var items = detailState.group.map(function(g) {
+        var dd = detailState.cache[dkey(g.origin, g.qid)] || {};
+        return { origin: g.origin, qid: g.qid, to: dd.to || g.to || '', disposition: dd.disposition || g.disposition || '' };
+      });
+      if (items.length < 2) { host.classList.add('d-none'); host.innerHTML = ''; return; }
+      var chips = items.map(function(it) {
+        var active = dkey(it.origin, it.qid) === detailState.primary;
+        var sc = statusColors[(it.disposition || '').toLowerCase()] || statusColors.other;
+        return '<button type="button" class="sw-chip' + (active ? ' active' : '') + '"' +
+          ' onclick="focusQueue(\'' + esc(it.origin) + '\',\'' + esc(it.qid) + '\')"' +
+          ' title="' + esc(it.qid + (it.to ? '  →  ' + it.to : '') + (it.disposition ? '  (' + it.disposition + ')' : '')) + '">' +
+          '<span class="sw-dot ' + sc.badge + '"></span>' +
+          '<span class="sw-qid">' + esc(it.qid) + '</span>' +
+          (it.to ? '<span class="sw-to">' + esc(it.to) + '</span>' : '') +
+          '</button>';
+      }).join('');
+      host.innerHTML = '<span class="sw-cap">Correlated &middot; ' + items.length + '</span>' + chips;
+      host.classList.remove('d-none');
+    }
+
+    // Re-focus the modal on a correlated queue id (its own envelope + outcome). Data for the
+    // group is already cached from openDetail; fetch on the off chance it isn't.
+    function focusQueue(origin, qid) {
+      var key = dkey(origin, qid);
+      if (key === detailState.primary) return;
+      detailState.primary = key;
+      if (detailState.cache[key]) {
+        renderDetail();
+      } else {
+        fetchDetail(origin, qid, function() { renderDetail(); });
+      }
+    }
+
     function renderDetail() {
       var primary = detailState.cache[detailState.primary];
       if (!primary) return;
       hideDetailLoading(); // data is in — drop the instant-feedback overlay
+      renderSwitcher();    // correlated queue-id chips (fan-out deliveries)
       var d = primary; // message-wide fields (subject, message-id) read from here
       // Envelope/status fields use ALL legs (earliest→latest), independent of which
       // servers are selected, so From/Client/To/Relay don't flip when toggling chips.
@@ -1840,7 +1906,9 @@
       // latest). The last row is the final result and carries the flag + "Result" tag
       // and the NDR badge (when applicable).
       var resultRow = document.getElementById('detail-result-row');
-      var rDisp = finalLeg.disposition || finalLeg.status || disposition;
+      // The outcome reflects the FOCUSED queue id (each correlated fan-out delivery has its
+      // own recipient + result); for a single-record message primary == finalLeg, unchanged.
+      var rDisp = primary.disposition || primary.status || finalLeg.disposition || disposition;
       var origins = detailState.origins;
       var showNdr = d.ndr && ['spam', 'virus', 'blocked'].indexOf((rDisp || '').toLowerCase()) === -1;
       if (origins.length) {
@@ -1888,7 +1956,7 @@
         // Result endpoint (mirrors the path's end, flag marker). delivered/sent → the To
         // recipient; a verdict → the verdict badge + reason.
         var flagMk = '<span class="sc-marker sc-flag">' + FLAG_SVG + '</span>';
-        var toAddr = finalLeg.to || primary.to || d.to || '';
+        var toAddr = primary.to || finalLeg.to || d.to || '';
         if (isVerdict) {
           // Surface the real verdict (scanner action · score · rule) rather than the
           // misleading "Saved/OK" delivery handoff a scanned-spam leg logs; keep the SMTP
@@ -1945,22 +2013,22 @@
       // final relay (latest hop), so the whole journey reads top to bottom.
       var senderHtml =
         '<div class="detail-col-header">' + MAIL_OUT_SVG + ' Sender</div>' +
-        field('From', originLeg.from || d.from) +
+        field('From', primary.from || originLeg.from || d.from) +
         field('Client', originLeg.client) +
         field('Subject', d.subject) +
         field('Size', originLeg.size ? originLeg.size + ' (' + (originLeg.size_bytes || 0).toLocaleString() + ' bytes)' : '');
 
       // Mark the recipient as delivered to a mailbox when any leg actually did so.
-      var toVal = finalLeg.to || d.to;
-      var mboxChip = allLegs.some(mpDeliversLocal) ? ' <span class="badge bg-success text-success-fg">delivered to mailbox</span>' : '';
+      var toVal = primary.to || finalLeg.to || d.to;
+      var mboxChip = mpDeliversLocal(primary) ? ' <span class="badge bg-success text-success-fg">delivered to mailbox</span>' : '';
       var toField = toVal ? '<div class="detail-field"><div class="detail-label">To</div>' +
         '<div class="detail-value">' + esc(toVal) + mboxChip + '</div></div>' : '';
       var recipientHtml =
         '<div class="detail-col-header">' + MAIL_IN_SVG + ' Recipient</div>' +
         toField +
-        field('Relay', finalLeg.relay) +
-        (finalLeg.delivery_queue_id ? field('Delivery queue ID', finalLeg.delivery_queue_id) : '') +
-        field('TLS', finalLeg.tls);
+        field('Relay', primary.relay || finalLeg.relay) +
+        ((primary.delivery_queue_id || finalLeg.delivery_queue_id) ? field('Delivery queue ID', primary.delivery_queue_id || finalLeg.delivery_queue_id) : '') +
+        field('TLS', primary.tls || finalLeg.tls);
 
       document.getElementById('detail-cols').innerHTML =
         '<div>' + senderHtml + '</div>' +

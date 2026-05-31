@@ -490,10 +490,6 @@ func (s *Store) mergeRecord(dst, src *Record) {
 	if dst.MessageID == "" {
 		dst.MessageID = src.MessageID
 	}
-	if dst.Status == "" {
-		dst.Status = src.Status
-		dst.StatusDetail = src.StatusDetail
-	}
 	if dst.Relay == "" {
 		dst.Relay = src.Relay
 	}
@@ -502,9 +498,6 @@ func (s *Store) mergeRecord(dst, src *Record) {
 	}
 	if dst.TLS == "" {
 		dst.TLS = src.TLS
-	}
-	if dst.Disposition == "" {
-		dst.Disposition = src.Disposition
 	}
 	if dst.Filter == "" {
 		dst.Filter = src.Filter
@@ -535,6 +528,66 @@ func (s *Store) mergeRecord(dst, src *Record) {
 			}
 		}
 	}
+
+	// Re-derive the terminal status from the FULL merged line set. A message may defer on
+	// several delivery attempts before it finally sends/bounces, and those lines can arrive
+	// in separate live-tail flushes (a stale group is flushed as "deferred", then the later
+	// "sent" arrives) — so the latest outcome must win, not whichever was seen first.
+	if code, detail := extractStatus(strings.Join(dst.RawLines, " ")); code != "" {
+		dst.Status, dst.StatusDetail = code, detail
+	} else if dst.Status == "" {
+		dst.Status, dst.StatusDetail = src.Status, src.StatusDetail
+	}
+	// Reclassify from the (possibly updated) status — but only when the disposition came
+	// from the Postfix status, never when a content-filter/rspamd verdict set it
+	// (spam/virus/blocked override the raw status and must survive a status change).
+	if dst.Disposition == "" || isStatusDisposition(dst.Disposition) {
+		if d := deriveDisposition(dst); d != "" {
+			dst.Disposition = d
+		} else if dst.Disposition == "" {
+			dst.Disposition = src.Disposition
+		}
+	}
+}
+
+// isStatusDisposition reports whether d is one of the dispositions derived purely from the
+// Postfix status, as opposed to a content-filter/rspamd verdict (spam/virus/blocked). Only
+// status-derived dispositions may be re-classified when a later, more terminal status
+// arrives; a scanner verdict must never be overwritten by a status change.
+func isStatusDisposition(d string) bool {
+	switch d {
+	case "sent", "delivered", "deferred", "bounced", "rejected", "received", "incomplete":
+		return true
+	default:
+		return false
+	}
+}
+
+func isNoqueueReject(r *Record) bool { return r.FilterAction == "noqueue-reject" }
+
+// rejectEmbeds reports whether one reject's SMTP detail contains the other verbatim — the
+// case where a front gateway's "… host <ip> said: <backend 550 line>" embeds the backend's
+// own reject of the same recipient. Symmetric (the shorter is looked for inside the longer);
+// the shorter must be a substantial reject line carrying a <recipient>, not a bare code.
+func rejectEmbeds(a, b string) bool {
+	long, short := a, b
+	if len(b) > len(a) {
+		long, short = b, a
+	}
+	return len(short) >= 25 && strings.Contains(short, "<") && strings.Contains(long, short)
+}
+
+// withinWindow reports whether two timestamps are within d of each other; a zero (unknown)
+// timestamp never excludes, so correlation falls back to the textual signal alone.
+func withinWindow(a, b time.Time, d time.Duration) bool {
+	if a.IsZero() || b.IsZero() {
+		return true
+	}
+	diff := a.Sub(b)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= d
 }
 
 type RecordDetail struct {
@@ -570,11 +623,17 @@ type LogLine struct {
 	Raw       string `json:"raw"`
 }
 
-// RelatedItem is the same message (matched by Message-ID) seen on another server —
-// surfaced as a cross-node link, never merged into the record.
+// RelatedItem is the same message (matched by Message-ID) seen on another server or queue
+// id — surfaced as a cross-node link, never merged into the record. It carries its own
+// envelope (From/To) and outcome so the detail modal's queue-id switcher can show each
+// correlated delivery's distinct sender/recipient/status without a second fetch (a message
+// that fans out to several recipients is a separate delivery per queue id).
 type RelatedItem struct {
 	Origin      string `json:"origin"`
 	QueueID     string `json:"queue_id"`
+	From        string `json:"from"`
+	To          string `json:"to"`
+	Subject     string `json:"subject"`
 	Disposition string `json:"disposition"`
 	Timestamp   string `json:"timestamp"`
 }
@@ -654,6 +713,45 @@ func (s *Store) GetDetail(origin, queueID string) *RecordDetail {
 			}
 			related = append(related, RelatedItem{
 				Origin: o.Origin, QueueID: o.QueueID,
+				From: o.From, To: o.To, Subject: o.Subject,
+				Disposition: o.dispositionOrStatus(), Timestamp: ots,
+			})
+		}
+	}
+
+	// Recipient-verification reject correlation. A NOQUEUE reject carries no Message-ID, so the
+	// front gateway's reject and the backend's reject of the same verification probe are never
+	// linked above. But Postfix embeds the backend's response verbatim in the front's ("… host
+	// <ip> said: <backend 550 line>"), so pair two rejects of the same recipient when one detail
+	// contains the other and they're close in time (the window guards against linking
+	// identical-text rejects from unrelated sessions).
+	if isNoqueueReject(r) && r.StatusDetail != "" {
+		fdet := strings.Join(strings.Fields(r.StatusDetail), " ")
+		for i := range s.records {
+			o := &s.records[i]
+			if o.Subsumed || (o.Origin == r.Origin && o.QueueID == r.QueueID) {
+				continue
+			}
+			if !isNoqueueReject(o) || o.StatusDetail == "" {
+				continue
+			}
+			if r.To != "" && o.To != "" && !strings.EqualFold(r.To, o.To) {
+				continue
+			}
+			if !withinWindow(r.Timestamp, o.Timestamp, 15*time.Minute) {
+				continue
+			}
+			odet := strings.Join(strings.Fields(o.StatusDetail), " ")
+			if fdet == odet || !rejectEmbeds(fdet, odet) {
+				continue
+			}
+			ots := ""
+			if !o.Timestamp.IsZero() {
+				ots = o.Timestamp.UTC().Format(time.RFC3339)
+			}
+			related = append(related, RelatedItem{
+				Origin: o.Origin, QueueID: o.QueueID,
+				From: o.From, To: o.To, Subject: o.Subject,
 				Disposition: o.dispositionOrStatus(), Timestamp: ots,
 			})
 		}

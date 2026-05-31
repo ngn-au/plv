@@ -18,7 +18,7 @@ Multi-arch (`amd64` / `arm64`) images are published to the GitHub Container Regi
 release:
 
 ```bash
-docker pull ghcr.io/ngn-au/plv:latest   # or a pinned :1.0.1 / :1.0
+docker pull ghcr.io/ngn-au/plv:latest   # or a pinned :1.0.2 / :1.0
 ```
 
 Minimal run:
@@ -38,7 +38,7 @@ Tags:
 | Tag | Points at |
 |---|---|
 | `latest` | The most recent release. |
-| `1.0.1`, `1.0` | A pinned version / minor line. |
+| `1.0.2`, `1.0` | A pinned version / minor line. |
 | `edge` | The current `main` branch (unreleased). |
 
 ## Option 2 — Docker Compose

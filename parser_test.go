@@ -418,3 +418,170 @@ func TestFilterBlockRule(t *testing.T) {
 		t.Errorf("rule = %q, want 'Block stupid domains'", v.rule)
 	}
 }
+
+// findRec returns the parsed record with the given queue id, or nil.
+func findRec(recs []Record, qid string) *Record {
+	for i := range recs {
+		if recs[i].QueueID == qid {
+			return &recs[i]
+		}
+	}
+	return nil
+}
+
+// TestDeferredThenSentTerminalStatus: a message that defers on several delivery attempts
+// before it finally sends must resolve to the terminal status (sent), not the first
+// attempt's deferred. Regression for the hosted-app bug where a since-delivered message
+// stayed pinned at "deferred". Synthetic data only.
+func TestDeferredThenSentTerminalStatus(t *testing.T) {
+	lines := []string{
+		`2026-05-31T09:00:01.000000+00:00 host postfix/submission/smtpd[1]: AAAA000001: client=app.internal.example[192.0.2.10]`,
+		`2026-05-31T09:00:01.100000+00:00 host postfix/cleanup[1]: AAAA000001: message-id=<retry@example.net>`,
+		`2026-05-31T09:00:01.200000+00:00 host postfix/qmgr[1]: AAAA000001: from=<billing@example.net>, size=2333, nrcpt=1 (queue active)`,
+		`2026-05-31T09:00:02.000000+00:00 host postfix/smtp[1]: AAAA000001: to=<client@example.org>, relay=mx.example.org[203.0.113.5]:25, delay=1, status=deferred (host mx.example.org said: 451 try later)`,
+		`2026-05-31T09:05:02.000000+00:00 host postfix/smtp[1]: AAAA000001: to=<client@example.org>, relay=mx.example.org[203.0.113.5]:25, delay=300, status=deferred (host mx.example.org said: 451 try later)`,
+		`2026-05-31T09:10:02.000000+00:00 host postfix/smtp[1]: AAAA000001: to=<client@example.org>, relay=mx.example.org[203.0.113.5]:25, delay=600, status=sent (250 OK id=1ABC)`,
+		`2026-05-31T09:10:02.100000+00:00 host postfix/qmgr[1]: AAAA000001: removed`,
+	}
+	r := findRec(parseLines(lines), "AAAA000001")
+	if r == nil {
+		t.Fatal("record AAAA000001 not found")
+	}
+	if r.Status != "sent" {
+		t.Errorf("Status = %q, want sent (terminal, not first deferred)", r.Status)
+	}
+	if r.Disposition != "sent" {
+		t.Errorf("Disposition = %q, want sent", r.Disposition)
+	}
+}
+
+// TestDeferredThenSentLiveMerge: the same scenario across two live-tail flushes — a stale
+// group is flushed as deferred, then the later "sent" lines arrive for the same queue id.
+// The store must reclassify to sent, not keep the earlier deferred.
+func TestDeferredThenSentLiveMerge(t *testing.T) {
+	store := NewStore(nil)
+	store.AddRecords(parseLines([]string{
+		`2026-05-31T09:00:01.200000+00:00 host postfix/qmgr[1]: BBBB000002: from=<billing@example.net>, size=2333, nrcpt=1 (queue active)`,
+		`2026-05-31T09:00:02.000000+00:00 host postfix/smtp[1]: BBBB000002: to=<client@example.org>, relay=mx.example.org[203.0.113.5]:25, status=deferred (host mx.example.org said: 451 try later)`,
+	}))
+	if d := store.GetDetail("", "BBBB000002"); d == nil || d.Disposition != "deferred" {
+		t.Fatalf("after first flush want deferred, got %+v", d)
+	}
+	store.AddRecords(parseLines([]string{
+		`2026-05-31T09:10:02.000000+00:00 host postfix/smtp[1]: BBBB000002: to=<client@example.org>, relay=mx.example.org[203.0.113.5]:25, status=sent (250 OK id=1ABC)`,
+		`2026-05-31T09:10:02.100000+00:00 host postfix/qmgr[1]: BBBB000002: removed`,
+	}))
+	d := store.GetDetail("", "BBBB000002")
+	if d == nil || d.Status != "sent" || d.Disposition != "sent" {
+		t.Errorf("after sent arrives want status/disposition sent, got %+v", d)
+	}
+}
+
+// TestMergeKeepsScannerVerdict: a content-filter verdict (e.g. PMG block) logs status=sent
+// but is classified "blocked"; a later status update must NOT reclassify it to sent.
+func TestMergeKeepsScannerVerdict(t *testing.T) {
+	s := NewStore(nil)
+	dst := &Record{
+		QueueID: "CCCC000003", Status: "sent", Disposition: "blocked",
+		Filter: "pmg-smtp-filter", FilterAction: "block",
+		RawLines: []string{`2026-05-31T09:00:00.000000+00:00 host postfix/smtp[1]: CCCC000003: to=<x@example.org>, relay=127.0.0.1[127.0.0.1]:10024, status=sent (250 OK (FILTER1))`},
+	}
+	src := &Record{
+		QueueID: "CCCC000003", Status: "sent", Disposition: "sent",
+		RawLines: []string{`2026-05-31T09:00:01.000000+00:00 host postfix/smtp[1]: CCCC000003: to=<x@example.org>, relay=mx.example.org[203.0.113.5]:25, status=sent (250 OK id=2)`},
+	}
+	s.mergeRecord(dst, src)
+	if dst.Disposition != "blocked" {
+		t.Errorf("scanner verdict overwritten by status: got %q, want blocked", dst.Disposition)
+	}
+}
+
+// TestFanOutRelatedRecipients: one message (shared Message-ID) fanned out to several
+// recipients via separate queue ids is surfaced as related items, each carrying its OWN
+// recipient + disposition so the detail modal's switcher can show every delivery. Synthetic.
+func TestFanOutRelatedRecipients(t *testing.T) {
+	store := NewStore(nil)
+	mid := "<calendar-fanout@example.com>"
+	store.records = []Record{
+		{QueueID: "FAN0000001", MessageID: mid, From: "sender@example.net", To: "primary@example.org",
+			Status: "sent", Disposition: "delivered", Relay: "mailbox[private/dovecot-lmtp]"},
+		{QueueID: "FAN0000002", MessageID: mid, From: "sender@example.net", To: "backup@example.org",
+			Status: "sent", Disposition: "delivered", Relay: "mailbox[private/dovecot-lmtp]"},
+		{QueueID: "FAN0000003", MessageID: mid, From: "sender@example.net", To: "archive@example.org",
+			Status: "sent", Disposition: "delivered", Relay: "mailbox[private/dovecot-lmtp]"},
+	}
+	store.byQueueID = map[string]int{
+		recKey("", "FAN0000001"): 0,
+		recKey("", "FAN0000002"): 1,
+		recKey("", "FAN0000003"): 2,
+	}
+
+	d := store.GetDetail("", "FAN0000001")
+	if d == nil {
+		t.Fatal("GetDetail returned nil")
+	}
+	if d.To != "primary@example.org" {
+		t.Errorf("focused To = %q, want primary@example.org", d.To)
+	}
+	if len(d.Related) != 2 {
+		t.Fatalf("want 2 related fan-out siblings, got %d", len(d.Related))
+	}
+	// Each related sibling must carry its own recipient (not the focused one).
+	got := map[string]bool{}
+	for _, r := range d.Related {
+		if r.To == "" {
+			t.Errorf("related %s has empty To (switcher can't label it)", r.QueueID)
+		}
+		if r.From != "sender@example.net" {
+			t.Errorf("related %s From = %q, want sender@example.net", r.QueueID, r.From)
+		}
+		got[r.To] = true
+	}
+	if !got["backup@example.org"] || !got["archive@example.org"] {
+		t.Errorf("related recipients = %v, want backup@ and archive@example.org", got)
+	}
+}
+
+// TestVerificationRejectCorrelation: a recipient-verification reject pair — the front gateway
+// rejecting an inbound RCPT (its detail embedding the backend's "host <ip> said: …" response)
+// and the backend rejecting the verification probe — carries NO Message-ID, so it can only be
+// linked by the embedded-detail signal. GetDetail must correlate the two (both directions).
+// Synthetic data only.
+func TestVerificationRejectCorrelation(t *testing.T) {
+	front := `2026-05-31T08:30:10.201778+10:00 nebula postfix/smtpd[1]: NOQUEUE: reject: RCPT from unknown[198.51.100.50]: 550 5.1.1 <ghost@example.org>: Recipient address rejected: undeliverable address: host 192.0.2.9[192.0.2.9] said: 550 5.1.1 <ghost@example.org>: Recipient address rejected: User unknown in virtual mailbox table (in reply to RCPT TO command); from=<sender@example.net> to=<ghost@example.org> proto=ESMTP helo=<198.51.100.50>`
+	backend := `2026-05-31T08:30:10.323579+10:00 drax postfix/smtpd[2]: NOQUEUE: reject: RCPT from gateway.example[198.51.100.51]: 550 5.1.1 <ghost@example.org>: Recipient address rejected: User unknown in virtual mailbox table; from=<probe@example.net> to=<ghost@example.org> proto=ESMTP helo=<gateway.example>`
+
+	store := NewStore(nil)
+	store.AddRecords(parseLines([]string{front, backend}))
+
+	recs := parseLines([]string{front, backend})
+	var frontQ, backQ string
+	for i := range recs {
+		if strings.Contains(recs[i].StatusDetail, "said:") {
+			frontQ = recs[i].QueueID
+		} else {
+			backQ = recs[i].QueueID
+		}
+	}
+	if frontQ == "" || backQ == "" {
+		t.Fatalf("could not identify front/backend rejects: front=%q back=%q", frontQ, backQ)
+	}
+
+	d := store.GetDetail("", frontQ)
+	if d == nil {
+		t.Fatal("nil detail for front reject")
+	}
+	if len(d.Related) != 1 || d.Related[0].QueueID != backQ {
+		t.Fatalf("front reject should correlate to the backend reject; got %+v", d.Related)
+	}
+	if d2 := store.GetDetail("", backQ); d2 == nil || len(d2.Related) != 1 || d2.Related[0].QueueID != frontQ {
+		t.Fatalf("backend reject should correlate to the front reject; got %+v", d2)
+	}
+
+	// Negative control: an unrelated reject for a DIFFERENT recipient must not correlate.
+	other := `2026-05-31T08:31:00.000000+10:00 drax postfix/smtpd[3]: NOQUEUE: reject: RCPT from x[198.51.100.70]: 550 5.1.1 <someone@example.org>: Recipient address rejected: User unknown in virtual mailbox table; from=<a@example.net> to=<someone@example.org> proto=ESMTP helo=<x>`
+	store.AddRecords(parseLines([]string{other}))
+	if d := store.GetDetail("", frontQ); d == nil || len(d.Related) != 1 {
+		t.Fatalf("front reject must still correlate to exactly 1 (the backend), got %+v", d.Related)
+	}
+}

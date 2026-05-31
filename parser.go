@@ -355,10 +355,14 @@ func extractMessageID(text string) string {
 }
 
 func extractStatus(text string) (string, string) {
-	m := reStatus.FindStringSubmatch(text)
-	if m == nil {
+	// Use the LAST status in the group, not the first: a message may defer on several
+	// delivery attempts before it finally sends or bounces, and the terminal line is the
+	// real outcome. Taking the first would pin a since-delivered message at "deferred".
+	ms := reStatus.FindAllStringSubmatch(text, -1)
+	if len(ms) == 0 {
 		return "", ""
 	}
+	m := ms[len(ms)-1]
 	code := strings.TrimSpace(m[1])
 	detail := strings.TrimSpace(m[2])
 	if code == "" {

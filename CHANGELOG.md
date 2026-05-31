@@ -6,6 +6,30 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-05-31
+
+### Added
+
+- **Correlated queue-id switcher in the detail modal.** When one email fans out to several
+  recipients (each delivered under its own queue id, sharing a Message-ID), the modal now shows a
+  **Correlated** chip row — one chip per delivery, labelled with its recipient — and clicking a
+  chip re-focuses the modal on that queue id's own sender, recipient, and outcome. Previously every
+  correlated item rendered the same single recipient.
+- **Recipient-verification rejects are correlated.** A `NOQUEUE` reject carries no Message-ID, so a
+  front gateway's "user unknown" reject and the backend's reject of the same recipient-verification
+  probe were never linked. PLV now pairs them via the backend response Postfix embeds verbatim in
+  the gateway's detail (`… host <ip> said: <backend 550 line>`), scoped to the same recipient and a
+  tight time window — so both rejects appear in the correlated switcher.
+
+### Fixed
+
+- **A message that defers before it delivers no longer stays stuck at "deferred".** Postfix
+  retries a deferred message on several attempts and logs each one; the parser took the *first*
+  status it saw, so a message that finally `status=sent` (delivered) was still shown as deferred.
+  It now uses the terminal status, and the live-tail merge re-classifies a record when a later,
+  more final status arrives (a content-filter/rspamd verdict such as spam/virus/blocked still
+  overrides the raw status and is preserved).
+
 ## [1.0.1] — 2026-05-31
 
 ### Added
@@ -141,6 +165,7 @@ First public release.
 - CodeQL (SAST), OpenSSF Scorecard, and dependency review run in CI; Dependabot keeps Go modules,
   GitHub Actions, and the base image up to date.
 
-[Unreleased]: https://github.com/ngn-au/plv/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/ngn-au/plv/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/ngn-au/plv/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/ngn-au/plv/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/ngn-au/plv/releases/tag/v1.0.0

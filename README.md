@@ -102,7 +102,7 @@ docker compose up -d
 #   → http://localhost:8080
 ```
 
-Prefer a pinned version? Use `ghcr.io/ngn-au/plv:1.0.1` (or `:1.0`) instead of `:latest`. Multi-arch
+Prefer a pinned version? Use `ghcr.io/ngn-au/plv:1.0.2` (or `:1.0`) instead of `:latest`. Multi-arch
 images (`amd64` / `arm64`) are published on every release.
 
 ### Building from source

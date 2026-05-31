@@ -22,7 +22,7 @@ themselves. This is the production-hardening checklist; to report a vulnerabilit
 - [ ] **Set a retention policy.** With persistence enabled, set `RETENTION_DAYS` so you don't hold
       mail metadata longer than you need to. Memory-only mode is naturally bounded by the logs on
       disk.
-- [ ] **Pin the image version.** Deploy `ghcr.io/ngn-au/plv:1.0.1`, not `:latest`, and upgrade
+- [ ] **Pin the image version.** Deploy `ghcr.io/ngn-au/plv:1.0.2`, not `:latest`, and upgrade
       deliberately. Each release image is cosign-signed — verify it before you trust it (see
       [Verifying a release](#verifying-a-release) below).
 
@@ -48,7 +48,7 @@ long-lived key, the signature is tied to the GitHub Actions workflow that built 
 you're about to run:
 
 ```bash
-cosign verify ghcr.io/ngn-au/plv:1.0.1 \
+cosign verify ghcr.io/ngn-au/plv:1.0.2 \
   --certificate-identity-regexp '^https://github.com/ngn-au/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
