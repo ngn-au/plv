@@ -78,6 +78,8 @@ func NewServer(store *Store, addr string, auth *AuthConfig) *http.Server {
 
 	mux.HandleFunc("/login", handleLogin(auth, sessions))
 	mux.HandleFunc("/logout", handleLogout(sessions))
+	mux.HandleFunc("/favicon.svg", handleFavicon)
+	mux.HandleFunc("/favicon.ico", handleFavicon) // browsers request this by default; serve the SVG
 	mux.HandleFunc("/", handleIndex)
 	mux.HandleFunc("/api/records", handleRecords(store))
 	mux.HandleFunc("/api/detail", handleDetail(store))
@@ -103,7 +105,8 @@ func NewServer(store *Store, addr string, auth *AuthConfig) *http.Server {
 
 func authMiddleware(sessions *SessionStore, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/login" {
+		switch r.URL.Path {
+		case "/login", "/favicon.svg", "/favicon.ico": // public assets — no session required
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -204,6 +207,20 @@ func handleLogout(sessions *SessionStore) http.HandlerFunc {
 // hard-set that it breaks a plain-HTTP login on a trusted network.
 func secureRequest(r *http.Request) bool {
 	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
+// handleFavicon serves the embedded SVG site icon at both /favicon.svg and the default
+// /favicon.ico (a single SVG, so there's no separate .ico to maintain) — which also stops
+// the browser's console 404 for /favicon.ico.
+func handleFavicon(w http.ResponseWriter, r *http.Request) {
+	data, err := webFS.ReadFile("web/favicon.svg")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write(data)
 }
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
