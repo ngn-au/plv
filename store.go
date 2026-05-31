@@ -490,10 +490,6 @@ func (s *Store) mergeRecord(dst, src *Record) {
 	if dst.MessageID == "" {
 		dst.MessageID = src.MessageID
 	}
-	if dst.Status == "" {
-		dst.Status = src.Status
-		dst.StatusDetail = src.StatusDetail
-	}
 	if dst.Relay == "" {
 		dst.Relay = src.Relay
 	}
@@ -502,9 +498,6 @@ func (s *Store) mergeRecord(dst, src *Record) {
 	}
 	if dst.TLS == "" {
 		dst.TLS = src.TLS
-	}
-	if dst.Disposition == "" {
-		dst.Disposition = src.Disposition
 	}
 	if dst.Filter == "" {
 		dst.Filter = src.Filter
@@ -534,6 +527,39 @@ func (s *Store) mergeRecord(dst, src *Record) {
 				dst.RawLines = append(dst.RawLines, l)
 			}
 		}
+	}
+
+	// Re-derive the terminal status from the FULL merged line set. A message may defer on
+	// several delivery attempts before it finally sends/bounces, and those lines can arrive
+	// in separate live-tail flushes (a stale group is flushed as "deferred", then the later
+	// "sent" arrives) — so the latest outcome must win, not whichever was seen first.
+	if code, detail := extractStatus(strings.Join(dst.RawLines, " ")); code != "" {
+		dst.Status, dst.StatusDetail = code, detail
+	} else if dst.Status == "" {
+		dst.Status, dst.StatusDetail = src.Status, src.StatusDetail
+	}
+	// Reclassify from the (possibly updated) status — but only when the disposition came
+	// from the Postfix status, never when a content-filter/rspamd verdict set it
+	// (spam/virus/blocked override the raw status and must survive a status change).
+	if dst.Disposition == "" || isStatusDisposition(dst.Disposition) {
+		if d := deriveDisposition(dst); d != "" {
+			dst.Disposition = d
+		} else if dst.Disposition == "" {
+			dst.Disposition = src.Disposition
+		}
+	}
+}
+
+// isStatusDisposition reports whether d is one of the dispositions derived purely from the
+// Postfix status, as opposed to a content-filter/rspamd verdict (spam/virus/blocked). Only
+// status-derived dispositions may be re-classified when a later, more terminal status
+// arrives; a scanner verdict must never be overwritten by a status change.
+func isStatusDisposition(d string) bool {
+	switch d {
+	case "sent", "delivered", "deferred", "bounced", "rejected", "received", "incomplete":
+		return true
+	default:
+		return false
 	}
 }
 

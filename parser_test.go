@@ -418,3 +418,80 @@ func TestFilterBlockRule(t *testing.T) {
 		t.Errorf("rule = %q, want 'Block stupid domains'", v.rule)
 	}
 }
+
+// findRec returns the parsed record with the given queue id, or nil.
+func findRec(recs []Record, qid string) *Record {
+	for i := range recs {
+		if recs[i].QueueID == qid {
+			return &recs[i]
+		}
+	}
+	return nil
+}
+
+// TestDeferredThenSentTerminalStatus: a message that defers on several delivery attempts
+// before it finally sends must resolve to the terminal status (sent), not the first
+// attempt's deferred. Regression for the hosted-app bug where a since-delivered message
+// stayed pinned at "deferred". Synthetic data only.
+func TestDeferredThenSentTerminalStatus(t *testing.T) {
+	lines := []string{
+		`2026-05-31T09:00:01.000000+00:00 host postfix/submission/smtpd[1]: AAAA000001: client=app.internal.example[192.0.2.10]`,
+		`2026-05-31T09:00:01.100000+00:00 host postfix/cleanup[1]: AAAA000001: message-id=<retry@example.net>`,
+		`2026-05-31T09:00:01.200000+00:00 host postfix/qmgr[1]: AAAA000001: from=<billing@example.net>, size=2333, nrcpt=1 (queue active)`,
+		`2026-05-31T09:00:02.000000+00:00 host postfix/smtp[1]: AAAA000001: to=<client@example.org>, relay=mx.example.org[203.0.113.5]:25, delay=1, status=deferred (host mx.example.org said: 451 try later)`,
+		`2026-05-31T09:05:02.000000+00:00 host postfix/smtp[1]: AAAA000001: to=<client@example.org>, relay=mx.example.org[203.0.113.5]:25, delay=300, status=deferred (host mx.example.org said: 451 try later)`,
+		`2026-05-31T09:10:02.000000+00:00 host postfix/smtp[1]: AAAA000001: to=<client@example.org>, relay=mx.example.org[203.0.113.5]:25, delay=600, status=sent (250 OK id=1ABC)`,
+		`2026-05-31T09:10:02.100000+00:00 host postfix/qmgr[1]: AAAA000001: removed`,
+	}
+	r := findRec(parseLines(lines), "AAAA000001")
+	if r == nil {
+		t.Fatal("record AAAA000001 not found")
+	}
+	if r.Status != "sent" {
+		t.Errorf("Status = %q, want sent (terminal, not first deferred)", r.Status)
+	}
+	if r.Disposition != "sent" {
+		t.Errorf("Disposition = %q, want sent", r.Disposition)
+	}
+}
+
+// TestDeferredThenSentLiveMerge: the same scenario across two live-tail flushes — a stale
+// group is flushed as deferred, then the later "sent" lines arrive for the same queue id.
+// The store must reclassify to sent, not keep the earlier deferred.
+func TestDeferredThenSentLiveMerge(t *testing.T) {
+	store := NewStore(nil)
+	store.AddRecords(parseLines([]string{
+		`2026-05-31T09:00:01.200000+00:00 host postfix/qmgr[1]: BBBB000002: from=<billing@example.net>, size=2333, nrcpt=1 (queue active)`,
+		`2026-05-31T09:00:02.000000+00:00 host postfix/smtp[1]: BBBB000002: to=<client@example.org>, relay=mx.example.org[203.0.113.5]:25, status=deferred (host mx.example.org said: 451 try later)`,
+	}))
+	if d := store.GetDetail("", "BBBB000002"); d == nil || d.Disposition != "deferred" {
+		t.Fatalf("after first flush want deferred, got %+v", d)
+	}
+	store.AddRecords(parseLines([]string{
+		`2026-05-31T09:10:02.000000+00:00 host postfix/smtp[1]: BBBB000002: to=<client@example.org>, relay=mx.example.org[203.0.113.5]:25, status=sent (250 OK id=1ABC)`,
+		`2026-05-31T09:10:02.100000+00:00 host postfix/qmgr[1]: BBBB000002: removed`,
+	}))
+	d := store.GetDetail("", "BBBB000002")
+	if d == nil || d.Status != "sent" || d.Disposition != "sent" {
+		t.Errorf("after sent arrives want status/disposition sent, got %+v", d)
+	}
+}
+
+// TestMergeKeepsScannerVerdict: a content-filter verdict (e.g. PMG block) logs status=sent
+// but is classified "blocked"; a later status update must NOT reclassify it to sent.
+func TestMergeKeepsScannerVerdict(t *testing.T) {
+	s := NewStore(nil)
+	dst := &Record{
+		QueueID: "CCCC000003", Status: "sent", Disposition: "blocked",
+		Filter: "pmg-smtp-filter", FilterAction: "block",
+		RawLines: []string{`2026-05-31T09:00:00.000000+00:00 host postfix/smtp[1]: CCCC000003: to=<x@example.org>, relay=127.0.0.1[127.0.0.1]:10024, status=sent (250 OK (FILTER1))`},
+	}
+	src := &Record{
+		QueueID: "CCCC000003", Status: "sent", Disposition: "sent",
+		RawLines: []string{`2026-05-31T09:00:01.000000+00:00 host postfix/smtp[1]: CCCC000003: to=<x@example.org>, relay=mx.example.org[203.0.113.5]:25, status=sent (250 OK id=2)`},
+	}
+	s.mergeRecord(dst, src)
+	if dst.Disposition != "blocked" {
+		t.Errorf("scanner verdict overwritten by status: got %q, want blocked", dst.Disposition)
+	}
+}

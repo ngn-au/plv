@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **A message that defers before it delivers no longer stays stuck at "deferred".** Postfix
+  retries a deferred message on several attempts and logs each one; the parser took the *first*
+  status it saw, so a message that finally `status=sent` (delivered) was still shown as deferred.
+  It now uses the terminal status, and the live-tail merge re-classifies a record when a later,
+  more final status arrives (a content-filter/rspamd verdict such as spam/virus/blocked still
+  overrides the raw status and is preserved).
+
 ## [1.0.1] — 2026-05-31
 
 ### Added
