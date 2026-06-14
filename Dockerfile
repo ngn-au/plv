@@ -23,7 +23,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -ldflags="-s -w -X main.gitSha=${GIT_SHA} -X main.releaseBuild=${RELEASE}" -o plv .
 
 # create a new stage from alpine
-FROM alpine:3.23@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+FROM alpine:3.24@sha256:a2d49ea686c2adfe3c992e47dc3b5e7fa6e6b5055609400dc2acaeb241c829f4
 RUN apk add --no-cache tzdata
 
 # OCI image metadata (the publish workflow adds source/revision labels too).
