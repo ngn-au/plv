@@ -38,6 +38,11 @@ var (
 	reConnect    = regexp.MustCompile(`connect from ([a-zA-Z0-9\-._]+)\[([^\]]+)\]`)
 	reTLS        = regexp.MustCompile(`Trusted TLS connection established to ([^[]+)\[([^\]]+)\]:([0-9]+)`)
 	reTimestamp  = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\S+)`)
+	// Traditional BSD/RFC 3164 syslog stamp: "Jun 30 06:12:00" — no year and no zone.
+	// This is the default on Debian and any non-journald rsyslog install, so PLV must
+	// read it too, not just the RFC3339 line journald/modern rsyslog emit. The day is
+	// space- or zero-padded ("Jun  3" / "Jun 30"), which time.Stamp's "_2" handles.
+	reBSDStamp = regexp.MustCompile(`^([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})`)
 
 	// Content-filter (Proxmox Mail Gateway pmg-smtp-filter) correlation.
 	// reFilterTag identifies a filter line and captures its session id.
@@ -258,15 +263,34 @@ func syntheticID(prefix, line string) string {
 }
 
 func extractTimestamp(text string) time.Time {
-	m := reTimestamp.FindStringSubmatch(text)
-	if m == nil {
-		return time.Time{}
+	return extractTimestampAt(text, time.Now(), time.Local)
+}
+
+// extractTimestampAt is the pure core of extractTimestamp: ref supplies the year that
+// the zone-less BSD stamp omits, and loc is the zone that stamp is interpreted in.
+// Splitting it out keeps year/zone inference deterministic and unit-testable.
+func extractTimestampAt(text string, ref time.Time, loc *time.Location) time.Time {
+	// Preferred: RFC3339 (journald / modern rsyslog) — carries its own year and offset.
+	if m := reTimestamp.FindStringSubmatch(text); m != nil {
+		if t, err := time.Parse(time.RFC3339Nano, m[1]); err == nil {
+			return t.UTC()
+		}
 	}
-	t, err := time.Parse(time.RFC3339Nano, m[1])
-	if err != nil {
-		return time.Time{}
+	// Fallback: BSD/RFC 3164 stamp (Debian default) — infer the year from ref and read
+	// the wall-clock in loc (the machine/container zone, as syslog wrote it).
+	if m := reBSDStamp.FindStringSubmatch(text); m != nil {
+		if t, err := time.Parse(time.Stamp, m[1]); err == nil {
+			got := time.Date(ref.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, loc)
+			// Logs are historical. A stamp that lands in the future (allowing a day of
+			// clock skew) is last year's rotation still bearing this month — e.g. a
+			// December line read in January — so roll the inferred year back one.
+			if got.After(ref.Add(24 * time.Hour)) {
+				got = time.Date(ref.Year()-1, t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, loc)
+			}
+			return got.UTC()
+		}
 	}
-	return t.UTC()
+	return time.Time{}
 }
 
 // logLineLocation returns the time zone of a line's RFC3339 timestamp (e.g. the +10:00
