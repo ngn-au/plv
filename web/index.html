@@ -249,7 +249,8 @@
       background: color-mix(in srgb, var(--tblr-primary, #066fd1) 14%, transparent); font-weight: 600;
     }
     .detail-switcher .sw-qid { font-family: var(--tblr-font-monospace); }
-    .detail-switcher .sw-to { color: var(--tblr-secondary-color); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .detail-switcher .sw-to { color: var(--tblr-body-color); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .detail-switcher .sw-hops { font-size: .6875rem; font-weight: 600; color: var(--tblr-secondary-color); font-variant-numeric: tabular-nums; }
     .detail-switcher .sw-chip.active .sw-to { color: var(--tblr-body-color); }
     .detail-switcher .sw-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
     #detail-modal .detail-qid { font-family: var(--tblr-font-monospace); font-size: 1.05rem; font-weight: 600; background: var(--tblr-bg-surface-secondary, rgba(130,130,150,.12)); padding: .2rem .55rem; border-radius: 7px; word-break: break-all; }
@@ -1545,9 +1546,20 @@
 
     // Build the message group (records sharing the Message-ID) + distinct servers.
     function rebuildGroup(d) {
-      var group = [{ origin: d.origin || '', qid: d.queue_id, disposition: d.disposition || d.status || '', timestamp: d.timestamp }];
+      var group = [{ origin: d.origin || '', qid: d.queue_id, to: d.to || '', from: d.from || '', disposition: d.disposition || d.status || '', timestamp: d.timestamp }];
       (d.related || []).forEach(function(it) {
-        group.push({ origin: it.origin || '', qid: it.queue_id, disposition: it.disposition || '', timestamp: it.timestamp });
+        group.push({ origin: it.origin || '', qid: it.queue_id, to: it.to || '', from: it.from || '', disposition: it.disposition || '', timestamp: it.timestamp });
+      });
+      // The same logical delivery can appear under several queue ids (an inbound scanner leg
+      // and a re-injected outbound leg live on different servers, each with its own qid). De-dup
+      // raw entries by (origin,qid) so a record echoed by both the Message-ID pass and the
+      // verification-reject pass is never listed twice.
+      var dseen = {};
+      group = group.filter(function(g) {
+        var k = dkey(g.origin, g.qid);
+        if (dseen[k]) return false;
+        dseen[k] = true;
+        return true;
       });
       detailState.group = group;
       var seen = {};
@@ -1843,35 +1855,88 @@
       host.classList.remove('d-none');
     }
 
-    // Correlated-queue-id switcher: a chip per delivery in the group (the focused one plus
-    // its same-Message-ID siblings — a fan-out to several recipients is a separate delivery
-    // per queue id). Each chip carries that delivery's own recipient + status; clicking it
-    // re-focuses the modal on that queue id. Hidden when there's nothing to switch between.
+    // How "final" a leg's outcome is, so a recipient that traversed several servers reports the
+    // delivery's real end state (the outbound "sent" leg, not the earlier inbound "received").
+    function dispFinality(d) {
+      switch ((d || '').toLowerCase()) {
+        case 'rejected': case 'reject': case 'bounced': case 'spam': case 'blocked': case 'virus': return 5;
+        case 'sent': case 'delivered': return 4;
+        case 'deferred': return 2;
+        case 'received': return 1;
+        default: return 3;
+      }
+    }
+
+    // Collapse the correlated legs into one entry PER RECIPIENT. A single delivery routinely
+    // spans two queue ids on two servers (inbound scanner leg → re-injected outbound leg), so
+    // listing every queue id shows the same recipient twice. Grouping by recipient yields one
+    // chip per person the message actually went to; each chip remembers all its legs (for the
+    // tooltip) and focuses the most-final one (so its result is "sent", not "received").
+    function correlatedDeliveries() {
+      var groups = [], byKey = {};
+      detailState.group.forEach(function(g) {
+        var dd = detailState.cache[dkey(g.origin, g.qid)] || {};
+        var to = dd.to || g.to || '';
+        var disp = dd.disposition || g.disposition || '';
+        var ts = dd.timestamp || g.timestamp || '';
+        // Key on recipient when known; otherwise the queue id stands alone (NOQUEUE rejects and
+        // sparse legs have no envelope recipient and must not all collapse into one blank chip).
+        var key = to ? 'r:' + to.toLowerCase() : 'q:' + dkey(g.origin, g.qid);
+        var grp = byKey[key];
+        if (!grp) { grp = { to: to, legs: [], earliest: ts, rep: null }; byKey[key] = grp; groups.push(grp); }
+        else if (!grp.to && to) grp.to = to;
+        grp.legs.push({ origin: g.origin, qid: g.qid, to: to, disposition: disp, timestamp: ts });
+        if (ts && (!grp.earliest || ts < grp.earliest)) grp.earliest = ts;
+        // Representative leg = most-final outcome; tie broken by the later timestamp.
+        var rep = grp.rep, cur = grp.legs[grp.legs.length - 1];
+        if (!rep || dispFinality(cur.disposition) > dispFinality(rep.disposition) ||
+            (dispFinality(cur.disposition) === dispFinality(rep.disposition) && (cur.timestamp || '') > (rep.timestamp || ''))) {
+          grp.rep = cur;
+        }
+      });
+      // Chronological left→right by each delivery's earliest leg; deterministic tiebreak on
+      // recipient then queue id so chips never swap places between renders.
+      groups.sort(function(a, b) {
+        var ax = a.earliest || '￿', bx = b.earliest || '￿';
+        if (ax !== bx) return ax < bx ? -1 : 1;
+        if (a.to !== b.to) return a.to < b.to ? -1 : 1;
+        return a.rep.qid < b.rep.qid ? -1 : (a.rep.qid > b.rep.qid ? 1 : 0);
+      });
+      return groups;
+    }
+
+    // Correlated-recipient switcher: one chip per recipient the message reached (a fan-out to
+    // several recipients, or a verification reject paired across gateways). The focused chip is
+    // highlighted; clicking another re-focuses the modal on that recipient's final leg. Hidden
+    // when there's only one delivery to switch between.
     function renderSwitcher() {
       var host = document.getElementById('detail-switcher');
       if (!host) return;
-      var items = detailState.group.map(function(g) {
-        var dd = detailState.cache[dkey(g.origin, g.qid)] || {};
-        return { origin: g.origin, qid: g.qid, to: dd.to || g.to || '', disposition: dd.disposition || g.disposition || '' };
-      });
-      if (items.length < 2) { host.classList.add('d-none'); host.innerHTML = ''; return; }
-      var chips = items.map(function(it) {
-        var active = dkey(it.origin, it.qid) === detailState.primary;
-        var sc = statusColors[(it.disposition || '').toLowerCase()] || statusColors.other;
+      var groups = correlatedDeliveries();
+      if (groups.length < 2) { host.classList.add('d-none'); host.innerHTML = ''; return; }
+      var chips = groups.map(function(grp) {
+        var rep = grp.rep;
+        var active = grp.legs.some(function(l) { return dkey(l.origin, l.qid) === detailState.primary; });
+        var sc = statusColors[(rep.disposition || '').toLowerCase()] || statusColors.other;
+        var label = grp.to || rep.qid;
+        // When a recipient was reached via more than one queue id, note the hop count instead of
+        // doubling the chip — the full path is already drawn in the Mail Path diagram.
+        var hops = grp.legs.length > 1 ? '<span class="sw-hops">&middot;' + grp.legs.length + '</span>' : '';
+        var tip = grp.legs.map(function(l) { return l.qid + (l.disposition ? ' (' + l.disposition + ')' : ''); }).join('  •  ');
         return '<button type="button" class="sw-chip' + (active ? ' active' : '') + '"' +
-          ' onclick="focusQueue(\'' + esc(it.origin) + '\',\'' + esc(it.qid) + '\')"' +
-          ' title="' + esc(it.qid + (it.to ? '  →  ' + it.to : '') + (it.disposition ? '  (' + it.disposition + ')' : '')) + '">' +
+          ' onclick="focusQueue(\'' + esc(rep.origin) + '\',\'' + esc(rep.qid) + '\')"' +
+          ' title="' + esc((grp.to ? grp.to + '  —  ' : '') + tip) + '">' +
           '<span class="sw-dot ' + sc.badge + '"></span>' +
-          '<span class="sw-qid">' + esc(it.qid) + '</span>' +
-          (it.to ? '<span class="sw-to">' + esc(it.to) + '</span>' : '') +
+          '<span class="sw-to">' + esc(label) + '</span>' + hops +
           '</button>';
       }).join('');
-      host.innerHTML = '<span class="sw-cap">Correlated &middot; ' + items.length + '</span>' + chips;
+      host.innerHTML = '<span class="sw-cap">Correlated &middot; ' + groups.length + '</span>' + chips;
       host.classList.remove('d-none');
     }
 
-    // Re-focus the modal on a correlated queue id (its own envelope + outcome). Data for the
-    // group is already cached from openDetail; fetch on the off chance it isn't.
+    // Re-focus the modal on a correlated recipient's final leg (its own envelope + outcome).
+    // Data for the whole group is cached by openDetail, so switching is synchronous; the guard
+    // on the async path drops a stale fetch when chips are clicked faster than a fetch resolves.
     function focusQueue(origin, qid) {
       var key = dkey(origin, qid);
       if (key === detailState.primary) return;
@@ -1879,7 +1944,7 @@
       if (detailState.cache[key]) {
         renderDetail();
       } else {
-        fetchDetail(origin, qid, function() { renderDetail(); });
+        fetchDetail(origin, qid, function() { if (detailState.primary === key) renderDetail(); });
       }
     }
 
@@ -1906,9 +1971,16 @@
       // latest). The last row is the final result and carries the flag + "Result" tag
       // and the NDR badge (when applicable).
       var resultRow = document.getElementById('detail-result-row');
-      // The outcome reflects the FOCUSED queue id (each correlated fan-out delivery has its
-      // own recipient + result); for a single-record message primary == finalLeg, unchanged.
-      var rDisp = primary.disposition || primary.status || finalLeg.disposition || disposition;
+      // The outcome reflects the FOCUSED recipient's delivery — not whichever leg was clicked.
+      // One recipient often spans an inbound "received" leg and an outbound "sent" leg; resolve
+      // to that recipient's most-final leg so the result reads "sent", never the earlier
+      // "received", regardless of which queue id opened the modal.
+      var deliveries = correlatedDeliveries();
+      var activeGrp = deliveries.filter(function(g) {
+        return g.legs.some(function(l) { return dkey(l.origin, l.qid) === detailState.primary; });
+      })[0];
+      var outcome = (activeGrp && detailState.cache[dkey(activeGrp.rep.origin, activeGrp.rep.qid)]) || primary;
+      var rDisp = outcome.disposition || outcome.status || finalLeg.disposition || disposition;
       var origins = detailState.origins;
       var showNdr = d.ndr && ['spam', 'virus', 'blocked'].indexOf((rDisp || '').toLowerCase()) === -1;
       if (origins.length) {
@@ -1956,16 +2028,16 @@
         // Result endpoint (mirrors the path's end, flag marker). delivered/sent → the To
         // recipient; a verdict → the verdict badge + reason.
         var flagMk = '<span class="sc-marker sc-flag">' + FLAG_SVG + '</span>';
-        var toAddr = primary.to || finalLeg.to || d.to || '';
+        var toAddr = outcome.to || primary.to || finalLeg.to || d.to || '';
         if (isVerdict) {
           // Surface the real verdict (scanner action · score · rule) rather than the
           // misleading "Saved/OK" delivery handoff a scanned-spam leg logs; keep the SMTP
           // detail when it actually carries the reason (e.g. a "… BLOCKED …" / reject line).
           var vbits = [];
-          if (d.filter_action) vbits.push(d.filter_action);
-          if (d.spam_score) vbits.push(d.spam_score);
-          if (d.filter_rule) vbits.push(d.filter_rule);
-          var sd = finalLeg.status_detail || '';
+          if (outcome.filter_action) vbits.push(outcome.filter_action);
+          if (outcome.spam_score) vbits.push(outcome.spam_score);
+          if (outcome.filter_rule) vbits.push(outcome.filter_rule);
+          var sd = outcome.status_detail || finalLeg.status_detail || '';
           if (sd && !/\bsaved\b|\bok\b/i.test(sd)) vbits.push(sd);
           var vtext = vbits.join(' · ') || sd;
           steps += '<div class="sc-step sc-result">' + flagMk +
@@ -2018,37 +2090,42 @@
         field('Subject', d.subject) +
         field('Size', originLeg.size ? originLeg.size + ' (' + (originLeg.size_bytes || 0).toLocaleString() + ' bytes)' : '');
 
-      // Mark the recipient as delivered to a mailbox when any leg actually did so.
-      var toVal = primary.to || finalLeg.to || d.to;
-      var mboxChip = mpDeliversLocal(primary) ? ' <span class="badge bg-success text-success-fg">delivered to mailbox</span>' : '';
+      // Recipient panel follows the focused delivery (outcome leg) so Relay / Delivery queue ID
+      // match the chip you're on, then falls back to the latest leg for single-record messages.
+      var toVal = outcome.to || primary.to || finalLeg.to || d.to;
+      var mboxChip = (mpDeliversLocal(outcome) || mpDeliversLocal(primary)) ? ' <span class="badge bg-success text-success-fg">delivered to mailbox</span>' : '';
       var toField = toVal ? '<div class="detail-field"><div class="detail-label">To</div>' +
         '<div class="detail-value">' + esc(toVal) + mboxChip + '</div></div>' : '';
       var recipientHtml =
         '<div class="detail-col-header">' + MAIL_IN_SVG + ' Recipient</div>' +
         toField +
-        field('Relay', primary.relay || finalLeg.relay) +
-        ((primary.delivery_queue_id || finalLeg.delivery_queue_id) ? field('Delivery queue ID', primary.delivery_queue_id || finalLeg.delivery_queue_id) : '') +
-        field('TLS', primary.tls || finalLeg.tls);
+        field('Relay', outcome.relay || primary.relay || finalLeg.relay) +
+        ((outcome.delivery_queue_id || primary.delivery_queue_id || finalLeg.delivery_queue_id) ? field('Delivery queue ID', outcome.delivery_queue_id || primary.delivery_queue_id || finalLeg.delivery_queue_id) : '') +
+        field('TLS', outcome.tls || primary.tls || finalLeg.tls);
 
       document.getElementById('detail-cols').innerHTML =
         '<div>' + senderHtml + '</div>' +
         '<div class="envelope-arrow"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="5" y2="19"/><polyline points="19 12 12 19 5 12"/></svg></div>' +
         '<div>' + recipientHtml + '</div>';
 
-      // Scanner / rejection verdict — full width, below the Sender/Recipient boxes.
+      // Scanner / rejection verdict — full width, below the Sender/Recipient boxes. The scan is
+      // logged on the inbound leg, which may not be the focused one (a fan-out's outbound legs
+      // carry no verdict), so take it from the focused outcome if present, else any leg that has
+      // one — the verdict belongs to the whole message.
       var scannerRow = document.getElementById('detail-scanner-row');
-      if (d.filter_action) {
-        var verdictHdr = d.filter ? 'Scanner' : 'Rejection';
+      var scan = outcome.filter_action ? outcome : (allLegs.filter(function(l) { return l.filter_action; })[0] || d);
+      if (scan.filter_action) {
+        var verdictHdr = scan.filter ? 'Scanner' : 'Rejection';
         var cell = function(label, value) {
           return '<div class="col-6 col-md-3">' + field(label, value) + '</div>';
         };
         scannerRow.innerHTML =
           '<div class="detail-col-header">' + verdictHdr + '</div>' +
           '<div class="row g-2">' +
-            cell('Action', d.filter_action) +
-            cell('Spam score', d.spam_score) +
-            cell('Rule', d.filter_rule) +
-            (d.filter ? cell('Filter', d.filter + (d.filter_id ? ' (' + d.filter_id + ')' : '')) : '') +
+            cell('Action', scan.filter_action) +
+            cell('Spam score', scan.spam_score) +
+            cell('Rule', scan.filter_rule) +
+            (scan.filter ? cell('Filter', scan.filter + (scan.filter_id ? ' (' + scan.filter_id + ')' : '')) : '') +
           '</div>';
         scannerRow.classList.remove('d-none');
       } else {

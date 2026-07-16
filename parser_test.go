@@ -4,6 +4,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // captureSink records everything a forwarder would ship.
@@ -583,5 +584,55 @@ func TestVerificationRejectCorrelation(t *testing.T) {
 	store.AddRecords(parseLines([]string{other}))
 	if d := store.GetDetail("", frontQ); d == nil || len(d.Related) != 1 {
 		t.Fatalf("front reject must still correlate to exactly 1 (the backend), got %+v", d.Related)
+	}
+}
+
+// TestExtractTimestampFormats covers both timestamp dialects PLV must read: the RFC3339
+// line journald/modern rsyslog emit, and the zone-less BSD/RFC 3164 stamp that is Debian's
+// default (issue #19 — those lines parsed to a zero time and rendered as a blank date).
+func TestExtractTimestampFormats(t *testing.T) {
+	// A fixed reference so year inference is deterministic. Africa/Johannesburg (+02:00,
+	// no DST) mirrors the reporter's TZ and keeps the expected UTC values exact.
+	loc := time.FixedZone("SAST", 2*60*60)
+	ref := time.Date(2026, time.June, 30, 12, 0, 0, 0, loc)
+
+	cases := []struct {
+		name string
+		line string
+		want time.Time // expected UTC instant; zero means "must not parse"
+	}{
+		{
+			name: "rfc3339 offset preserved",
+			line: `2026-06-30T06:12:01.123456+02:00 host postfix/smtp[1]: 516981C0263: to=<r@example.com>, status=sent (250 ok)`,
+			want: time.Date(2026, time.June, 30, 4, 12, 1, 123456000, time.UTC),
+		},
+		{
+			name: "bsd stamp interpreted in loc",
+			line: `Jun 30 06:12:00 postfix/qmgr[1284]: 516981C0263: from=<noreply@example.com>, size=10989, nrcpt=1 (queue active)`,
+			want: time.Date(2026, time.June, 30, 4, 12, 0, 0, time.UTC), // 06:12 SAST → 04:12 UTC
+		},
+		{
+			name: "bsd stamp single-digit day space padded",
+			line: `Jun  3 09:05:00 postfix/smtpd[5554]: disconnect from unknown[198.51.100.10]`,
+			want: time.Date(2026, time.June, 3, 7, 5, 0, 0, time.UTC),
+		},
+		{
+			name: "bsd future month rolls back a year",
+			line: `Dec 25 23:59:00 postfix/qmgr[1]: ABCDEF012345: removed`, // Dec > ref June → last year
+			want: time.Date(2025, time.December, 25, 21, 59, 0, 0, time.UTC),
+		},
+		{
+			name: "garbage does not parse",
+			line: `not a real log line`,
+			want: time.Time{},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractTimestampAt(tc.line, ref, loc)
+			if !got.Equal(tc.want) {
+				t.Fatalf("extractTimestampAt = %v, want %v", got.UTC(), tc.want)
+			}
+		})
 	}
 }
